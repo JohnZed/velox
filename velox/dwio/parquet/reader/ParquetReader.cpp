@@ -76,6 +76,30 @@ int32_t fieldIdOrMissing(const thrift::SchemaElement& schemaElement) {
   return schemaElement.field_id().value_or(kMissingPhysicalFieldId);
 }
 
+void advancePastSchemaNode(
+    const std::vector<thrift::SchemaElement>& schema,
+    uint32_t& schemaIdx) {
+  VELOX_CHECK_LT(schemaIdx, schema.size());
+  const auto numChildren = schema[schemaIdx].num_children().value_or(0);
+  ++schemaIdx;
+  for (int32_t i = 0; i < numChildren; ++i) {
+    advancePastSchemaNode(schema, schemaIdx);
+  }
+}
+
+bool hasTopLevelFieldIds(const std::vector<thrift::SchemaElement>& schema) {
+  uint32_t schemaIdx = 1;
+  const auto numTopLevelFields = schema.front().num_children().value_or(0);
+  for (int32_t i = 0; i < numTopLevelFields; ++i) {
+    VELOX_CHECK_LT(schemaIdx, schema.size());
+    if (schema[schemaIdx].field_id().has_value()) {
+      return true;
+    }
+    advancePastSchemaNode(schema, schemaIdx);
+  }
+  return false;
+}
+
 std::string schemaElementNameOrFieldId(
     const thrift::SchemaElement& schemaElement,
     dwio::common::ColumnMappingMode mode) {
@@ -347,8 +371,9 @@ class ReaderBase {
 
   memory::MemoryPool& pool_;
   const uint64_t filePreloadThreshold_;
-  // Copy of options. Must be owned by 'this'.
-  const dwio::common::ReaderOptions options_;
+  // Copy of options. Must be owned by 'this'. The effective Parquet column
+  // mapping mode may be adjusted after the footer is loaded.
+  dwio::common::ReaderOptions options_;
   // Copy of Parquet-specific options, or defaults for direct ParquetReader
   // callers that do not go through ParquetReaderFactory.
   const ParquetReaderOptions parquetReaderOptions_;
@@ -502,6 +527,13 @@ void ReaderBase::initializeSchema() {
       *(*fileMetaData_->schema())[0].num_children(),
       0,
       "Invalid Parquet schema: root element must have at least 1 child");
+
+  if (options_.columnMappingMode() ==
+          dwio::common::ColumnMappingMode::kParquetFieldId &&
+      options_.parquetFieldIdFallbackToName() &&
+      !hasTopLevelFieldIds(*fileMetaData_->schema())) {
+    options_.setColumnMappingMode(dwio::common::ColumnMappingMode::kName);
+  }
 
   uint32_t maxDefine = 0;
   uint32_t maxRepeat = 0;

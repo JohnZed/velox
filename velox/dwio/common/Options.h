@@ -763,6 +763,14 @@ class ReaderOptions : public io::ReaderOptions {
     return *this;
   }
 
+  /// When field-ID mapping is requested for Parquet, fall back to name mapping
+  /// if the file has no field IDs on any top-level column. This supports
+  /// migrated Iceberg files written by systems that did not preserve IDs.
+  ReaderOptions& setParquetFieldIdFallbackToName(bool value) {
+    parquetFieldIdFallbackToName_ = value;
+    return *this;
+  }
+
   /// Sets the requested (table) schema field ids for
   /// ColumnMappingMode::kFieldId, one ParquetFieldId tree per top-level column,
   /// aligned to fileSchema().
@@ -864,6 +872,10 @@ class ReaderOptions : public io::ReaderOptions {
 
   ColumnMappingMode columnMappingMode() const {
     return columnMappingMode_;
+  }
+
+  bool parquetFieldIdFallbackToName() const {
+    return parquetFieldIdFallbackToName_;
   }
 
   const std::shared_ptr<random::RandomSkipTracker>& randomSkip() const {
@@ -1048,6 +1060,7 @@ class ReaderOptions : public io::ReaderOptions {
   bool fileColumnNamesReadAsLowerCase_{false};
   // Controls how physical file columns are matched to requested schema columns.
   ColumnMappingMode columnMappingMode_{ColumnMappingMode::kPosition};
+  bool parquetFieldIdFallbackToName_{false};
   std::shared_ptr<random::RandomSkipTracker> randomSkip_;
   std::shared_ptr<velox::common::ScanSpec> scanSpec_;
   const tz::TimeZone* sessionTimezone_{nullptr};

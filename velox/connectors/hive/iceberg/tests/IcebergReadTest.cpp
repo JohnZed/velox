@@ -23,9 +23,11 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/encode/Base64.h"
+#include "velox/common/file/LocalFile.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
+#include "velox/dwio/parquet/writer/Writer.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
@@ -156,6 +158,28 @@ class IcebergReadTest : public test::IcebergTestBase {
     const auto dataSink =
         createDataSinkAndAppendData(data, outputDirectory->getPath());
     dataSink->close();
+    return outputDirectory;
+  }
+
+  std::shared_ptr<test::TempDirectoryPath> writeParquetDataWithoutFieldIds(
+      const std::vector<RowVectorPtr>& data) {
+    VELOX_CHECK(!data.empty());
+    fileFormat_ = dwio::common::FileFormat::PARQUET;
+    auto outputDirectory = test::TempDirectoryPath::create();
+    const auto path = outputDirectory->getPath() + "/data.parquet";
+    auto sink = std::make_unique<dwio::common::WriteFileSink>(
+        std::make_unique<LocalWriteFile>(path, true, false), path);
+
+    dwio::common::WriterOptions writerOptions;
+    writerOptions.memoryPool = opPool_->parent();
+    writerOptions.formatSpecificOptions =
+        std::make_shared<parquet::ParquetWriterOptions>();
+    parquet::Writer writer(
+        std::move(sink), writerOptions, data.front()->rowType());
+    for (const auto& vector : data) {
+      writer.write(vector);
+    }
+    writer.close();
     return outputDirectory;
   }
 
@@ -470,6 +494,28 @@ TEST_F(IcebergReadTest, readParquetFlatSchemaEvolutionByFieldId) {
         readCase.columns,
         {readCase.expected});
   }
+}
+
+TEST_F(IcebergReadTest, readParquetWithoutFieldIds) {
+  const auto type =
+      ROW({"id", "flag", "status"}, {BIGINT(), BOOLEAN(), VARCHAR()});
+  const std::vector<RowVectorPtr> data{makeRowVector(
+      type->names(),
+      {makeFlatVector<int64_t>({10, 20, 30}),
+       makeFlatVector<bool>({true, false, true}),
+       makeFlatVector<std::string>({"old-a", "old-b", "old-c"})})};
+  const auto outputDirectory = writeParquetDataWithoutFieldIds(data);
+
+  assertParquetFieldIdRead(
+      outputDirectory->getPath(),
+      type,
+      type,
+      {
+          {"id", "id", BIGINT(), makeFieldId(1), {}},
+          {"flag", "flag", BOOLEAN(), makeFieldId(2), {}},
+          {"status", "status", VARCHAR(), makeFieldId(3), {}},
+      },
+      data);
 }
 
 TEST_F(IcebergReadTest, readParquetFilterOnlyColumnByFieldId) {
