@@ -177,6 +177,27 @@ TEST_F(TimestampWithTimeZoneTest, readWithNulls) {
   }
 }
 
+TEST_F(TimestampWithTimeZoneTest, readAllNullTimestamps) {
+  std::vector<Timestamp> timestamps(3, Timestamp(0, 0));
+  std::vector<bool> nulls(timestamps.size(), true);
+  auto reader = writeAndCreateReader(timestamps, nulls);
+
+  auto rowType = ROW({"ts_with_tz"}, {timestampWithTimeZoneType()});
+  auto rowReaderOpts = makeRowReaderOpts(rowType);
+  rowReaderOpts.setScanSpec(makeScanSpec(rowType));
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  VectorPtr result = BaseVector::create(rowType, 0, leafPool_.get());
+  ASSERT_EQ(rowReader->next(1000, result), timestamps.size());
+  auto resultVector = result->loadedVector()->as<RowVector>();
+  auto tsVector = resultVector->childAt(0)->as<FlatVector<int64_t>>();
+  ASSERT_NE(tsVector, nullptr);
+  EXPECT_TRUE(isTimestampWithTimeZoneType(tsVector->type()));
+  for (size_t i = 0; i < timestamps.size(); ++i) {
+    EXPECT_TRUE(tsVector->isNullAt(i));
+  }
+}
+
 // Test reading timestamps with microsecond precision
 TEST_F(TimestampWithTimeZoneTest, readMicrosecondPrecision) {
   std::vector<Timestamp> timestamps = {
