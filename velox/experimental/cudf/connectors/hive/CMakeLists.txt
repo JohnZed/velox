@@ -35,4 +35,5 @@ if(VELOX_ENABLE_ABFS)
   target_link_libraries(velox_cudf_hive_connector PRIVATE velox_abfs)
 endif()
 
+add_subdirectory(delta)
 add_subdirectory(iceberg)
