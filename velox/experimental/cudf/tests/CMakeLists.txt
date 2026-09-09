@@ -306,6 +306,7 @@ velox_add_cudf_test(
   LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_window
 )
 
+add_subdirectory(delta)
 add_subdirectory(iceberg)
 add_subdirectory(utils)
 

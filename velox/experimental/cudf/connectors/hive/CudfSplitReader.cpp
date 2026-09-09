@@ -266,7 +266,10 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk() {
 
     auto tableWithMetadata = splitReader_->read_chunk();
     return castDecimalColumnsToVeloxTypes(
-        std::move(tableWithMetadata.tbl), outputType_, stream_, output_mr);
+        std::move(tableWithMetadata.tbl),
+        projectedReadType(),
+        stream_,
+        output_mr);
   }
 
   // Read table using the experimental parquet reader
@@ -329,7 +332,10 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk() {
 
   auto tableWithMetadata = exptSplitReader_->materialize_all_columns_chunk();
   return castDecimalColumnsToVeloxTypes(
-      std::move(tableWithMetadata.tbl), outputType_, stream_, output_mr);
+      std::move(tableWithMetadata.tbl),
+      projectedReadType(),
+      stream_,
+      output_mr);
 }
 
 void CudfSplitReader::resetSplit() {

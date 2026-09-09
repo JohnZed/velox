@@ -107,6 +107,12 @@ class CudfSplitReader : public NvtxHelper {
   // Determine the output memory resource for the cuDF reader.
   virtual rmm::device_async_resource_ref determineCudfMemoryResource() const;
 
+  // Returns the Velox types corresponding to the physical cuDF projection.
+  // Specialized readers may remove synthesized columns before file decoding.
+  virtual RowTypePtr projectedReadType() const {
+    return outputType_;
+  }
+
   // Read the next table chunk from the parquet reader (regular or hybrid).
   // Returns nullopt when no more data.
   virtual std::optional<std::unique_ptr<cudf::table>> readNextChunk();
