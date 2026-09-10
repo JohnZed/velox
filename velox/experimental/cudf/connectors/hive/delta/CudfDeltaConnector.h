@@ -24,6 +24,11 @@ namespace facebook::velox::cudf_velox::connector::hive::delta {
 using namespace facebook::velox::connector;
 using namespace facebook::velox::config;
 
+/// Returns whether all projected Delta columns can be produced directly by
+/// the cuDF reader. Unsupported shapes use the CPU Hive reader and the normal
+/// Velox-to-cuDF boundary for downstream GPU operators.
+bool isCudfDeltaScanSupported(const ColumnHandleMap& columnHandles);
+
 /// Provides GPU-accelerated reads for Delta Lake data files selected by an
 /// upstream coordinator.
 class CudfDeltaConnector final

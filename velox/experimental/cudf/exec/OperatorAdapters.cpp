@@ -143,6 +143,16 @@ class TableScanAdapter : public OperatorAdapter {
     bool canRunOnGPU = cudfHiveConnector != nullptr or
         cudfDeltaConnector != nullptr or cudfIcebergConnector != nullptr;
 
+    if (cudfDeltaConnector != nullptr &&
+        !connector::hive::delta::isCudfDeltaScanSupported(
+            tableScanNode->assignments())) {
+      LOG_FALLBACK(
+          "Delta table scan uses a column shape not supported by the cuDF "
+          "reader, PlanNode id: {}",
+          planNode->id());
+      return false;
+    }
+
     if (!canRunOnGPU) {
       LOG_FALLBACK(
           "TableScan connector is not CudfHiveConnector, CudfDeltaConnector, or CudfIcebergConnector, PlanNode id: {}",
