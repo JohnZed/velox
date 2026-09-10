@@ -242,5 +242,28 @@ TEST_F(CudfDeltaReadTest, deltaPartitionEncoding) {
       .assertResults({expected});
 }
 
+TEST_F(CudfDeltaReadTest, gpuScanCapability) {
+  velox_connector::ColumnHandleMap assignments;
+  assignments["id"] = makeHandle("id", BIGINT());
+  assignments["items"] =
+      makeHandle("items", ARRAY(ROW({"x"}, {BIGINT()})));
+  EXPECT_TRUE(cudf_delta::isCudfDeltaScanSupported(assignments));
+
+  assignments["attributes"] =
+      makeHandle("attributes", MAP(VARCHAR(), VARCHAR()));
+  EXPECT_FALSE(cudf_delta::isCudfDeltaScanSupported(assignments));
+
+  assignments.clear();
+  std::vector<common::Subfield> requiredSubfields;
+  requiredSubfields.emplace_back("root.child");
+  assignments["nested"] = std::make_shared<HiveColumnHandle>(
+      "nested",
+      HiveColumnHandle::ColumnType::kRegular,
+      BIGINT(),
+      BIGINT(),
+      std::move(requiredSubfields));
+  EXPECT_FALSE(cudf_delta::isCudfDeltaScanSupported(assignments));
+}
+
 } // namespace
 } // namespace facebook::velox::cudf_velox::exec::test
