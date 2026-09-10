@@ -25,6 +25,41 @@ namespace facebook::velox::cudf_velox::connector::hive::delta {
 
 using namespace facebook::velox::connector;
 
+namespace {
+
+bool containsMap(const TypePtr& type) {
+  if (type->isMap()) {
+    return true;
+  }
+  if (type->isRow()) {
+    for (size_t index = 0; index < type->size(); ++index) {
+      if (containsMap(type->childAt(index))) {
+        return true;
+      }
+    }
+  } else if (type->isArray()) {
+    return containsMap(type->childAt(0));
+  }
+  return false;
+}
+
+} // namespace
+
+bool isCudfDeltaScanSupported(const ColumnHandleMap& columnHandles) {
+  for (const auto& [_, columnHandle] : columnHandles) {
+    auto* hiveColumn =
+        dynamic_cast<const velox::connector::hive::HiveColumnHandle*>(
+            columnHandle.get());
+    if (hiveColumn == nullptr || !hiveColumn->requiredSubfields().empty() ||
+        !hiveColumn->extractions().empty() ||
+        containsMap(hiveColumn->schemaType()) ||
+        containsMap(hiveColumn->dataType())) {
+      return false;
+    }
+  }
+  return true;
+}
+
 CudfDeltaConnector::CudfDeltaConnector(
     const std::string& id,
     std::shared_ptr<const velox::config::ConfigBase> config,
@@ -39,7 +74,7 @@ std::unique_ptr<DataSource> CudfDeltaConnector::createDataSource(
     const ConnectorTableHandlePtr& tableHandle,
     const ColumnHandleMap& columnHandles,
     ConnectorQueryCtx* connectorQueryCtx) {
-  if (cudfIsRegistered()) {
+  if (cudfIsRegistered() && isCudfDeltaScanSupported(columnHandles)) {
     return std::make_unique<CudfDeltaDataSource>(outputType,
                                                  tableHandle,
                                                  columnHandles,
