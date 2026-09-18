@@ -24,7 +24,6 @@
 #include "velox/connectors/hive/FileConfig.h"
 #include "velox/connectors/hive/FileConnectorSplit.h"
 #include "velox/connectors/hive/FileConnectorUtil.h"
-#include "velox/core/VectorUtil.h"
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/tz/TimeZoneMap.h"
@@ -398,7 +397,7 @@ void FileSplitReader::setPartitionValue(
       "ColumnHandle is missing for partition key {}",
       partitionKey);
   const auto type = it->second->dataType();
-  const auto constant = velox::core::newConstantFromString(
+  const auto constant = newConstantFromString(
       type,
       value,
       connectorQueryCtx_->memoryPool(),

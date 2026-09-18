@@ -17,7 +17,7 @@
 #include <gtest/gtest.h>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/Memory.h"
-#include "velox/core/VectorUtil.h"
+#include "velox/connectors/hive/FileConnectorUtil.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/Timestamp.h"
@@ -49,7 +49,7 @@ TEST_F(PartitionValueConversionTest, shortDecimalConversion) {
   auto decimalType = DECIMAL(10, 2); // precision=10, scale=2
 
   // Test positive decimal
-  auto result = core::newConstantFromString(
+  auto result = connector::hive::newConstantFromString(
       decimalType,
       "123.45",
       pool_.get(),
@@ -73,7 +73,7 @@ TEST_F(PartitionValueConversionTest, shortDecimalNegative) {
   auto decimalType = DECIMAL(10, 2);
 
   // Test negative decimal
-  auto result = core::newConstantFromString(
+  auto result = connector::hive::newConstantFromString(
       decimalType,
       "-456.78",
       pool_.get(),
@@ -93,7 +93,7 @@ TEST_F(PartitionValueConversionTest, shortDecimalNegative) {
 TEST_F(PartitionValueConversionTest, shortDecimalZero) {
   auto decimalType = DECIMAL(10, 2);
 
-  auto result = core::newConstantFromString(
+  auto result = connector::hive::newConstantFromString(
       decimalType,
       "0.00",
       pool_.get(),
@@ -111,7 +111,7 @@ TEST_F(PartitionValueConversionTest, shortDecimalZero) {
 TEST_F(PartitionValueConversionTest, longDecimalConversion) {
   auto decimalType = DECIMAL(38, 10); // precision=38, scale=10
 
-  auto result = core::newConstantFromString(
+  auto result = connector::hive::newConstantFromString(
       decimalType,
       "12345678901234567890.1234567890",
       pool_.get(),
@@ -133,7 +133,7 @@ TEST_F(PartitionValueConversionTest, longDecimalConversion) {
 TEST_F(PartitionValueConversionTest, longDecimalLargeValue) {
   auto decimalType = DECIMAL(38, 5);
 
-  auto result = core::newConstantFromString(
+  auto result = connector::hive::newConstantFromString(
       decimalType,
       "999999999999999999999999999999999.99999",
       pool_.get(),
@@ -151,7 +151,7 @@ TEST_F(PartitionValueConversionTest, longDecimalLargeValue) {
 TEST_F(PartitionValueConversionTest, decimalNullValue) {
   auto decimalType = DECIMAL(10, 2);
 
-  auto result = core::newConstantFromString(
+  auto result = connector::hive::newConstantFromString(
       decimalType,
       std::nullopt,
       pool_.get(),
@@ -169,7 +169,7 @@ TEST_F(PartitionValueConversionTest, timestampWithTimeZoneConversion) {
   auto timestampTzType = TIMESTAMP_WITH_TIME_ZONE();
 
   // Test timestamp string in format: "2024-02-18 10:30:45.123"
-  auto result = core::newConstantFromString(
+  auto result = connector::hive::newConstantFromString(
       timestampTzType,
       "2024-02-18 10:30:45.123",
       pool_.get(),
@@ -193,7 +193,7 @@ TEST_F(PartitionValueConversionTest, timestampWithTimeZoneEpoch) {
   auto timestampTzType = TIMESTAMP_WITH_TIME_ZONE();
 
   // Test epoch timestamp (1970-01-01 00:00:00)
-  auto result = core::newConstantFromString(
+  auto result = connector::hive::newConstantFromString(
       timestampTzType,
       "1970-01-01 00:00:00",
       pool_.get(),
@@ -214,7 +214,7 @@ TEST_F(PartitionValueConversionTest, timestampWithTimeZoneEpoch) {
 TEST_F(PartitionValueConversionTest, timestampWithTimeZoneNull) {
   auto timestampTzType = TIMESTAMP_WITH_TIME_ZONE();
 
-  auto result = core::newConstantFromString(
+  auto result = connector::hive::newConstantFromString(
       timestampTzType,
       std::nullopt,
       pool_.get(),
@@ -231,7 +231,7 @@ TEST_F(PartitionValueConversionTest, timestampWithTimeZoneNull) {
 TEST_F(PartitionValueConversionTest, regularTimestampConversion) {
   auto timestampType = TIMESTAMP();
 
-  auto result = core::newConstantFromString(
+  auto result = connector::hive::newConstantFromString(
       timestampType,
       "2024-02-18 10:30:45",
       pool_.get(),
@@ -254,7 +254,7 @@ TEST_F(PartitionValueConversionTest, regularTimestampConversion) {
 TEST_F(PartitionValueConversionTest, dateConversion) {
   auto dateType = DATE();
 
-  auto result = core::newConstantFromString(
+  auto result = connector::hive::newConstantFromString(
       dateType,
       "2024-02-18",
       pool_.get(),
@@ -278,7 +278,7 @@ TEST_F(PartitionValueConversionTest, dateDaysSinceEpoch) {
   auto dateType = DATE();
 
   // Test with isDaysSinceEpoch=true (Iceberg format)
-  auto result = core::newConstantFromString(
+  auto result = connector::hive::newConstantFromString(
       dateType,
       "19771", // Days since epoch
       pool_.get(),
@@ -298,7 +298,7 @@ TEST_F(PartitionValueConversionTest, decimalPrecisionValidation) {
   auto decimalType = DECIMAL(5, 2); // Max value: 999.99
 
   // This should work
-  auto result = core::newConstantFromString(
+  auto result = connector::hive::newConstantFromString(
       decimalType,
       "999.99",
       pool_.get(),
@@ -315,7 +315,7 @@ TEST_F(PartitionValueConversionTest, decimalPrecisionValidation) {
 TEST_F(PartitionValueConversionTest, decimalScaleHandling) {
   auto decimalType = DECIMAL(10, 4); // scale=4
 
-  auto result = core::newConstantFromString(
+  auto result = connector::hive::newConstantFromString(
       decimalType,
       "123.4567",
       pool_.get(),
@@ -335,7 +335,7 @@ TEST_F(PartitionValueConversionTest, decimalScaleHandling) {
 TEST_F(PartitionValueConversionTest, decimalTrailingZeros) {
   auto decimalType = DECIMAL(10, 3);
 
-  auto result = core::newConstantFromString(
+  auto result = connector::hive::newConstantFromString(
       decimalType,
       "100.000",
       pool_.get(),
@@ -354,7 +354,7 @@ TEST_F(PartitionValueConversionTest, decimalTrailingZeros) {
 TEST_F(PartitionValueConversionTest, decimalLeadingZeros) {
   auto decimalType = DECIMAL(10, 2);
 
-  auto result = core::newConstantFromString(
+  auto result = connector::hive::newConstantFromString(
       decimalType,
       "000.12",
       pool_.get(),
@@ -374,7 +374,7 @@ TEST_F(PartitionValueConversionTest, decimalLeadingZeros) {
 TEST_F(PartitionValueConversionTest, stringPartitionValue) {
   auto stringType = VARCHAR();
 
-  auto result = core::newConstantFromString(
+  auto result = connector::hive::newConstantFromString(
       stringType,
       "partition_value",
       pool_.get(),
@@ -394,13 +394,12 @@ TEST_F(PartitionValueConversionTest, stringPartitionValue) {
 TEST_F(PartitionValueConversionTest, integerPartitionValue) {
   auto intType = INTEGER();
 
-  auto result = core::newConstantFromString(
+  auto result = connector::hive::newConstantFromString(
       intType,
       "42",
       pool_.get(),
       false,
-      false,
-      nullptr);
+      false);
 
   ASSERT_NE(nullptr, result);
   auto flatVector = result->as<ConstantVector<int32_t>>();
@@ -413,7 +412,7 @@ TEST_F(PartitionValueConversionTest, timestampWithTimezone) {
   auto timezone = tz::locateZone("America/Los_Angeles");
 
   // Test timestamp with timezone conversion
-  auto result = core::newConstantFromString(
+  auto result = connector::hive::newConstantFromString(
       timestampType,
       "2024-02-18 10:30:45",
       pool_.get(),
@@ -437,7 +436,7 @@ TEST_F(PartitionValueConversionTest, timestampLocalTime) {
   auto timestampType = TIMESTAMP();
 
   // Test with isLocalTimestamp=true (converts to GMT)
-  auto result = core::newConstantFromString(
+  auto result = connector::hive::newConstantFromString(
       timestampType,
       "2024-02-18 10:30:45",
       pool_.get(),
@@ -461,7 +460,7 @@ TEST_F(PartitionValueConversionTest, timestampWithTimeZoneWithTimezone) {
   auto timezone = tz::locateZone("Europe/London");
 
   // TIMESTAMP WITH TIME ZONE should pack with UTC regardless of timezone param
-  auto result = core::newConstantFromString(
+  auto result = connector::hive::newConstantFromString(
       timestampTzType,
       "2024-02-18 10:30:45",
       pool_.get(),
@@ -482,7 +481,7 @@ TEST_F(PartitionValueConversionTest, invalidDecimalFormat) {
   // Invalid decimal string
   EXPECT_THROW(
       {
-        core::newConstantFromString(
+        connector::hive::newConstantFromString(
             decimalType,
             "not_a_number",
             pool_.get(),
@@ -499,7 +498,7 @@ TEST_F(PartitionValueConversionTest, decimalOverflow) {
   // Value exceeds precision
   EXPECT_THROW(
       {
-        core::newConstantFromString(
+        connector::hive::newConstantFromString(
             decimalType,
             "10000.00", // Too large for DECIMAL(5,2)
             pool_.get(),
@@ -515,7 +514,7 @@ TEST_F(PartitionValueConversionTest, decimalInvalidScale) {
 
   // Too many decimal places - Note: DecimalUtil may round instead of throwing
   // This test verifies the behavior is consistent
-  auto result = core::newConstantFromString(
+  auto result = connector::hive::newConstantFromString(
       decimalType,
       "123.456", // 3 decimal places, but scale is 2
       pool_.get(),
@@ -539,7 +538,7 @@ TEST_F(PartitionValueConversionTest, invalidTimestampFormat) {
   // Invalid timestamp string
   EXPECT_THROW(
       {
-        core::newConstantFromString(
+        connector::hive::newConstantFromString(
             timestampType,
             "not-a-timestamp",
             pool_.get(),
@@ -556,7 +555,7 @@ TEST_F(PartitionValueConversionTest, invalidDateFormat) {
   // Invalid date string
   EXPECT_THROW(
       {
-        core::newConstantFromString(
+        connector::hive::newConstantFromString(
             dateType,
             "2024-13-45", // Invalid month and day
             pool_.get(),
@@ -573,7 +572,7 @@ TEST_F(PartitionValueConversionTest, invalidIntegerFormat) {
   // Non-numeric string
   EXPECT_THROW(
       {
-        core::newConstantFromString(
+        connector::hive::newConstantFromString(
             intType,
             "abc123",
             pool_.get(),
@@ -590,7 +589,7 @@ TEST_F(PartitionValueConversionTest, integerOverflow) {
   // Value too large for int32
   EXPECT_THROW(
       {
-        core::newConstantFromString(
+        connector::hive::newConstantFromString(
             intType,
             "9999999999999", // Exceeds INT32_MAX
             pool_.get(),
@@ -607,7 +606,7 @@ TEST_F(PartitionValueConversionTest, timestampWithTimeZoneInvalidFormat) {
   // Invalid timestamp format
   EXPECT_THROW(
       {
-        core::newConstantFromString(
+        connector::hive::newConstantFromString(
             timestampTzType,
             "invalid-timestamp",
             pool_.get(),
@@ -632,7 +631,7 @@ TEST_F(PartitionValueConversionTest, timestampDifferentTimezones) {
 
   for (const auto& tzName : timezones) {
     auto timezone = tz::locateZone(tzName);
-    auto result = core::newConstantFromString(
+    auto result = connector::hive::newConstantFromString(
         timestampType,
         "2024-02-18 12:00:00",
         pool_.get(),
@@ -654,7 +653,7 @@ TEST_F(PartitionValueConversionTest, timestampUTCTimezone) {
   auto timestampType = TIMESTAMP();
   auto utcTimezone = tz::locateZone("UTC");
 
-  auto result = core::newConstantFromString(
+  auto result = connector::hive::newConstantFromString(
       timestampType,
       "2024-02-18 12:00:00",
       pool_.get(),
@@ -677,7 +676,7 @@ TEST_F(PartitionValueConversionTest, decimalNegativeOverflow) {
   // Negative value exceeds precision
   EXPECT_THROW(
       {
-        core::newConstantFromString(
+        connector::hive::newConstantFromString(
             decimalType,
             "-10000.00",
             pool_.get(),
@@ -694,7 +693,7 @@ TEST_F(PartitionValueConversionTest, longDecimalInvalidFormat) {
   // Invalid format
   EXPECT_THROW(
       {
-        core::newConstantFromString(
+        connector::hive::newConstantFromString(
             decimalType,
             "12.34.56", // Multiple decimal points
             pool_.get(),
@@ -711,7 +710,7 @@ TEST_F(PartitionValueConversionTest, decimalEmptyString) {
   // Empty string
   EXPECT_THROW(
       {
-        core::newConstantFromString(
+        connector::hive::newConstantFromString(
             decimalType,
             "",
             pool_.get(),
@@ -727,7 +726,7 @@ TEST_F(PartitionValueConversionTest, decimalEmptyString) {
 // No timezone in string → packed with UTC key 0, millis unchanged.
 TEST_F(PartitionValueConversionTest, timestampWithTimeZoneNoTimezoneUsesUTCKey) {
   auto type = TIMESTAMP_WITH_TIME_ZONE();
-  auto result = core::newConstantFromString(
+  auto result = connector::hive::newConstantFromString(
       type, "1970-01-01 00:00:00", pool_.get(), false, false, nullptr);
 
   ASSERT_NE(nullptr, result);
@@ -743,7 +742,7 @@ TEST_F(PartitionValueConversionTest, timestampWithTimeZoneNamedTimezoneConvertsT
   auto type = TIMESTAMP_WITH_TIME_ZONE();
   // "2021-01-01 00:00:00 America/Los_Angeles": LA is UTC-8 in January,
   // so UTC time is 2021-01-01 08:00:00.
-  auto result = core::newConstantFromString(
+  auto result = connector::hive::newConstantFromString(
       type,
       "2021-01-01 00:00:00 America/Los_Angeles",
       pool_.get(),
@@ -768,7 +767,7 @@ TEST_F(PartitionValueConversionTest, timestampWithTimeZoneNamedTimezoneConvertsT
 // UTC named timezone in string → UTC key, millis unchanged.
 TEST_F(PartitionValueConversionTest, timestampWithTimeZoneUTCNamedZone) {
   auto type = TIMESTAMP_WITH_TIME_ZONE();
-  auto result = core::newConstantFromString(
+  auto result = connector::hive::newConstantFromString(
       type, "2021-01-01 00:00:00 UTC", pool_.get(), false, false, nullptr);
 
   ASSERT_NE(nullptr, result);
@@ -786,7 +785,7 @@ TEST_F(PartitionValueConversionTest, timestampWithTimeZoneUTCNamedZone) {
 TEST_F(PartitionValueConversionTest, timestampWithTimeZoneOutOfRangeHourThrows) {
   auto type = TIMESTAMP_WITH_TIME_ZONE();
   EXPECT_THROW(
-      core::newConstantFromString(
+      connector::hive::newConstantFromString(
           type,
           "2021-01-01 00:00:00 +99:00",
           pool_.get(),
@@ -803,7 +802,7 @@ TEST_F(PartitionValueConversionTest, timestampWithTimeZoneOutOfRangeHourThrows) 
 TEST_F(PartitionValueConversionTest, timestampWithTimeZoneUnrecognizedOffsetThrows) {
   auto type = TIMESTAMP_WITH_TIME_ZONE();
   VELOX_ASSERT_THROW(
-      core::newConstantFromString(
+      connector::hive::newConstantFromString(
           type,
           "2021-01-01 00:00:00 +15:00",
           pool_.get(),
@@ -820,7 +819,7 @@ TEST_F(PartitionValueConversionTest, dateInvalidDaysSinceEpoch) {
   // This throws folly::ConversionError, not VeloxUserError
   EXPECT_THROW(
       {
-        core::newConstantFromString(
+        connector::hive::newConstantFromString(
             dateType,
             "not_a_number",
             pool_.get(),

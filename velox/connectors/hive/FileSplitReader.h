@@ -21,6 +21,7 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/FileColumnHandle.h"
 #include "velox/connectors/hive/FileConnectorSplit.h"
+#include "velox/connectors/hive/FileConnectorUtil.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/FileTableHandle.h"
 #include "velox/dwio/common/Options.h"

@@ -17,11 +17,14 @@
 #pragma once
 
 #include <folly/Executor.h>
+#include <optional>
+#include <string>
 
 #include "velox/common/config/Config.h"
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/dwio/common/Reader.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::connector::hive {
 
@@ -36,6 +39,25 @@ struct FormatScopedConfigs {
   config::ConfigBase connectorConfig;
   config::ConfigBase sessionProperties;
 };
+
+/// Creates a constant vector of size 1 from a string representation of a
+/// partition or info-column value. A missing value produces a null constant.
+VectorPtr newConstantFromString(
+    const TypePtr& type,
+    const std::optional<std::string>& value,
+    memory::MemoryPool* pool,
+    bool isLocalTimestamp,
+    bool isDaysSinceEpoch);
+
+/// As above, but interprets local TIMESTAMP values in the supplied session
+/// timezone. A null timezone preserves the five-argument overload's behavior.
+VectorPtr newConstantFromString(
+    const TypePtr& type,
+    const std::optional<std::string>& value,
+    memory::MemoryPool* pool,
+    bool isLocalTimestamp,
+    bool isDaysSinceEpoch,
+    const tz::TimeZone* timezone);
 
 FormatScopedConfigs makeFormatScopedConfigs(
     const FileConfig& fileConfig,

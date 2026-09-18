@@ -14,8 +14,6 @@
  * limitations under the License.
  */
 #include "velox/connectors/hive/HiveIndexSource.h"
-#include "velox/core/VectorUtil.h"
-
 
 #include <folly/ScopeGuard.h>
 #include <folly/container/F14Set.h>
@@ -25,6 +23,7 @@
 #include "velox/common/time/Timer.h"
 #include "velox/connectors/hive/FileDataSource.h"
 #include "velox/connectors/hive/FileIndexReader.h"
+#include "velox/connectors/hive/FileConnectorUtil.h"
 #include "velox/connectors/hive/FileSplitReader.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
@@ -1025,7 +1024,7 @@ void HiveIndexSource::setPartitionValue(
       "ColumnHandle is missing for partition key {}",
       partitionKey);
   const auto type = it->second->dataType();
-  const auto constant = core::newConstantFromString(
+  const auto constant = newConstantFromString(
       type,
       value,
       pool_,
@@ -1136,7 +1135,7 @@ void HiveIndexSource::createSplitGroup(
     const auto& partitionValue =
         extractPartitionValue(split, cond.partitionColumnName);
     const auto& handle = partitionKeyHandles_.at(cond.partitionColumnName);
-    group.partitionValues.emplace_back(core::newConstantFromString(
+    group.partitionValues.emplace_back(newConstantFromString(
         handle->dataType(),
         partitionValue,
         pool_,

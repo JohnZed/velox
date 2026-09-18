@@ -16,6 +16,8 @@
 
 #include "velox/connectors/hive/FileConnectorUtil.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <fmt/format.h>
 #include <unordered_map>
 
@@ -27,11 +29,153 @@
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/dwio/dwrf/common/Config.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/type/DecimalUtil.h"
+#include "velox/type/Timestamp.h"
+#include "velox/type/TimestampConversion.h"
+#include "velox/type/tz/TimeZoneMap.h"
+#include "velox/vector/ConstantVector.h"
 #ifdef VELOX_ENABLE_PARQUET
 #include "velox/dwio/parquet/common/ParquetConfig.h"
 #endif
 
 namespace facebook::velox::connector::hive {
+namespace {
+
+// Parses a TIMESTAMP WITH TIME ZONE string using Presto-cast semantics and
+// returns a packed int64 constant vector, or nullopt if parsing fails.
+std::optional<VectorPtr> handleTimestampWithTimeZoneTypeConversion(
+    const TypePtr& type,
+    const std::string& value,
+    memory::MemoryPool* pool) {
+  auto timestampResult = util::fromTimestampWithTimezoneString(
+      StringView(value), util::TimestampParseMode::kPrestoCast);
+  if (timestampResult.hasError()) {
+    return std::nullopt;
+  }
+
+  auto [timestamp, timeZone, offsetMillis] = std::move(timestampResult).value();
+  if (timeZone == nullptr) {
+    if (offsetMillis.has_value()) {
+      VELOX_USER_FAIL(
+          "Unknown timezone in TIMESTAMP WITH TIME ZONE value: {}", value);
+    }
+    // No timezone in string; the parsed timestamp is already in UTC.
+    return std::make_shared<ConstantVector<int64_t>>(
+        pool, 1, false, type, pack(timestamp.toMillis(), 0 /* UTC */));
+  }
+
+  timestamp.toGMT(*timeZone);
+  return std::make_shared<ConstantVector<int64_t>>(
+      pool,
+      1,
+      false,
+      type,
+      pack(timestamp.toMillis(), timeZone->id()));
+}
+
+template <TypeKind kind>
+VectorPtr newConstantFromStringImpl(
+    const TypePtr& type,
+    const std::optional<std::string>& value,
+    memory::MemoryPool* pool,
+    bool isLocalTimestamp,
+    bool isDaysSinceEpoch,
+    const tz::TimeZone* timezone) {
+  using T = typename TypeTraits<kind>::NativeType;
+  if (!value.has_value()) {
+    return std::make_shared<ConstantVector<T>>(pool, 1, true, type, T());
+  }
+
+  if (type->isDate()) {
+    int32_t days = 0;
+    if (isDaysSinceEpoch) {
+      days = folly::to<int32_t>(value.value());
+    } else {
+      days = DATE()->toDays(value.value());
+    }
+    return std::make_shared<ConstantVector<int32_t>>(
+        pool, 1, false, type, std::move(days));
+  }
+
+  if constexpr (std::is_same_v<T, int64_t> || std::is_same_v<T, int128_t>) {
+    if (type->isDecimal()) {
+      T decimalValue = 0;
+      auto [precision, scale] = getDecimalPrecisionScale(*type);
+      auto status = DecimalUtil::castFromString(
+          StringView(value.value()), precision, scale, decimalValue);
+      if (!status.ok()) {
+        VELOX_USER_FAIL(status.message());
+      }
+      return std::make_shared<ConstantVector<T>>(
+          pool, 1, false, type, std::move(decimalValue));
+    }
+    if (isTimestampWithTimeZoneType(type)) {
+      auto result = handleTimestampWithTimeZoneTypeConversion(
+          type, value.value(), pool);
+      if (result.has_value()) {
+        return result.value();
+      }
+      // Fall through to normal BIGINT handling if timestamp parsing failed.
+    }
+  }
+
+  if constexpr (std::is_same_v<T, StringView>) {
+    return std::make_shared<ConstantVector<StringView>>(
+        pool, 1, false, type, StringView(value.value()));
+  } else {
+    auto copy = velox::util::Converter<kind>::tryCast(value.value())
+                    .thenOrThrow(folly::identity, [&](const Status& status) {
+                      VELOX_USER_FAIL("{}", status.message());
+                    });
+    if constexpr (kind == TypeKind::TIMESTAMP) {
+      if (type->equivalent(*TIMESTAMP())) {
+        if (timezone != nullptr) {
+          copy.toGMT(*timezone);
+        } else if (isLocalTimestamp) {
+          copy.toGMT(Timestamp::defaultTimezone());
+        }
+      }
+    }
+    return std::make_shared<ConstantVector<T>>(
+        pool, 1, false, type, std::move(copy));
+  }
+}
+
+} // namespace
+
+VectorPtr newConstantFromString(
+    const TypePtr& type,
+    const std::optional<std::string>& value,
+    memory::MemoryPool* pool,
+    bool isLocalTimestamp,
+    bool isDaysSinceEpoch) {
+  return newConstantFromString(
+      type,
+      value,
+      pool,
+      isLocalTimestamp,
+      isDaysSinceEpoch,
+      nullptr);
+}
+
+VectorPtr newConstantFromString(
+    const TypePtr& type,
+    const std::optional<std::string>& value,
+    memory::MemoryPool* pool,
+    bool isLocalTimestamp,
+    bool isDaysSinceEpoch,
+    const tz::TimeZone* timezone) {
+  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
+      newConstantFromStringImpl,
+      type->kind(),
+      type,
+      value,
+      pool,
+      isLocalTimestamp,
+      isDaysSinceEpoch,
+      timezone);
+}
 
 FormatScopedConfigs makeFormatScopedConfigs(
     const FileConfig& fileConfig,

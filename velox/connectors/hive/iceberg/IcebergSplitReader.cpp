@@ -25,12 +25,12 @@
 #include "velox/common/config/Config.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/connectors/hive/FileConfig.h"
+#include "velox/connectors/hive/FileConnectorUtil.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/connectors/hive/iceberg/IcebergSessionCredentials.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
-#include "velox/core/VectorUtil.h"
 #include "velox/dwio/common/BufferUtil.h"
 #include "velox/vector/DecodedVector.h"
 
@@ -623,7 +623,7 @@ void IcebergSplitReader::configureEqualityDeleteColumns() {
         // in the user's projection. Derive the flag from the column type
         // instead — Iceberg always uses days-since-epoch for DATE.
         const bool isDaysSinceEpoch = equalityColumnTypes[i]->isDate();
-        auto constant = core::newConstantFromString(
+        auto constant = newConstantFromString(
             equalityColumnTypes[i],
             partitionIt->second,
             connectorQueryCtx_->memoryPool(),
@@ -933,7 +933,7 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
     if (auto iter = splitInfoColumns.find(fieldName);
         iter != splitInfoColumns.end()) {
       auto infoColumnType = readerOutputType_->findChild(fieldName);
-      auto constant = core::newConstantFromString(
+      auto constant = newConstantFromString(
           infoColumnType,
           iter->second,
           connectorQueryCtx_->memoryPool(),
@@ -1066,7 +1066,7 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
                     columnType,
                     "Column '{}' not found in table schema",
                     fieldName);
-                auto constant = core::newConstantFromString(
+                auto constant = newConstantFromString(
                     columnType,
                     icebergColumnHandle->initialDefaultValue().value(),
                     connectorQueryCtx_->memoryPool(),

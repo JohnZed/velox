@@ -17,11 +17,11 @@
 #include "velox/connectors/hive/HiveSplitReader.h"
 
 #include "velox/connectors/hive/FileConfig.h"
+#include "velox/connectors/hive/FileConnectorUtil.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/delta/DeltaSplitReader.h"
 #include "velox/connectors/hive/delta/HiveDeltaSplit.h"
-#include "velox/core/VectorUtil.h"
 
 namespace facebook::velox::connector::hive {
 
@@ -198,7 +198,7 @@ std::vector<TypePtr> HiveSplitReader::adaptColumns(
       auto iter = hiveSplit_->infoColumns.find(fieldName);
       auto infoColumnType =
           readerOutputType_->childAt(readerOutputType_->getChildIdx(fieldName));
-      auto constant = core::newConstantFromString(
+      auto constant = newConstantFromString(
           infoColumnType,
           iter->second,
           connectorQueryCtx_->memoryPool(),

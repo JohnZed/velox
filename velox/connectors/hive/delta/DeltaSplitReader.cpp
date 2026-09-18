@@ -17,8 +17,8 @@
 #include "velox/connectors/hive/delta/DeltaSplitReader.h"
 
 #include "velox/connectors/hive/FileConfig.h"
+#include "velox/connectors/hive/FileConnectorUtil.h"
 #include "velox/connectors/hive/delta/HiveDeltaSplit.h"
-#include "velox/core/VectorUtil.h"
 
 using namespace facebook::velox::dwio::common;
 
@@ -105,7 +105,7 @@ std::vector<TypePtr> DeltaSplitReader::adaptColumns(
         iter != hiveSplit_->infoColumns.end()) {
       // Handle info columns (e.g., $path, $file_size)
       auto infoColumnType = readerOutputType_->findChild(fieldName);
-      auto constant = core::newConstantFromString(
+      auto constant = newConstantFromString(
           infoColumnType,
           iter->second,
           connectorQueryCtx_->memoryPool(),
@@ -151,4 +151,3 @@ std::vector<TypePtr> DeltaSplitReader::adaptColumns(
 }
 
 } // namespace facebook::velox::connector::hive::delta
-
