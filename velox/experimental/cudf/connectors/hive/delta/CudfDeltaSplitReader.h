@@ -48,7 +48,6 @@ class CudfDeltaSplitReader : public CudfSplitReader {
       const std::shared_ptr<const velox_hive::HiveConfig>& hiveConfig,
       const std::shared_ptr<io::IoStatistics>& ioStatistics,
       const std::shared_ptr<IoStats>& ioStats,
-      bool useExperimentalCudfReader,
       cudf::ast::expression const* subfieldFilterExpr);
 
  protected:
@@ -57,21 +56,11 @@ class CudfDeltaSplitReader : public CudfSplitReader {
   void prepareSplitInternal(
       dwio::common::RuntimeStats& runtimeStats) override;
 
-  /// Avoids constructing a Parquet reader when every requested column is
-  /// synthesized from split metadata or schema evolution.
-  void setupReader() override;
-
   /// Defers the logical filter when it must observe synthesized columns.
   cudf::ast::expression const* pushdownFilter() const override;
 
   /// Uses temporary GPU memory when a deferred filter still has to run.
   rmm::device_async_resource_ref determineCudfMemoryResource() const override;
-
-  /// Returns types aligned with the physical projection after synthesized
-  /// Delta columns have been removed.
-  RowTypePtr projectedReadType() const override {
-    return fileReadType_;
-  }
 
   /// Reads physical data, injects Delta constants, and applies deferred
   /// filters before returning the assembled table.
@@ -142,9 +131,6 @@ class CudfDeltaSplitReader : public CudfSplitReader {
 
   // Records top-level physical names from the current Parquet footer.
   std::unordered_set<std::string> fileColumnNames_;
-
-  // Describes types aligned with the physical cuDF projection.
-  RowTypePtr fileReadType_;
 
   // Tracks the number of rows covered by the split's byte range.
   std::size_t splitRowCount_{0};

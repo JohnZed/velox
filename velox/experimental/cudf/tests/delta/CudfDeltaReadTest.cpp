@@ -66,7 +66,9 @@ class CudfDeltaReadTest : public CudfHiveConnectorTestBase {
       const std::unordered_map<std::string, std::optional<std::string>>&
           partitionKeys = {},
       const std::unordered_map<std::string, std::string>& infoColumns = {},
-      bool hasDeletionVector = false) {
+      bool hasDeletionVector = false,
+      velox_delta::DeltaColumnMappingMode columnMappingMode =
+          velox_delta::DeltaColumnMappingMode::kNone) {
     const auto fileSize = filesystems::getFileSystem(dataFilePath, nullptr)
                               ->openFileForRead(dataFilePath)
                               ->size();
@@ -84,7 +86,8 @@ class CudfDeltaReadTest : public CudfHiveConnectorTestBase {
         /*cacheable=*/true,
         infoColumns,
         /*fileProperties=*/std::nullopt,
-        hasDeletionVector)};
+        hasDeletionVector,
+        columnMappingMode)};
   }
 
   static std::shared_ptr<HiveColumnHandle> makeHandle(
@@ -287,6 +290,80 @@ TEST_F(CudfDeltaReadTest, rejectsDeletionVectors) {
             .copyResults(pool()),
         "Reading Delta files with a deletion vector is not supported.");
   }
+}
+
+TEST_F(CudfDeltaReadTest, decimalProjectionAcrossTwoSplits) {
+  const auto decimalType = DECIMAL(10, 2);
+  auto data = makeRowVector(
+      {"id", "amount"},
+      {makeFlatVector<int64_t>({1, 2}),
+       makeFlatVector<int64_t>({12345, -6789}, decimalType)});
+  auto dataFile = TempFilePath::create();
+  writeToFile(dataFile->getPath(), data);
+  const auto tableType = ROW(
+      {"region", "id", "added", "amount"},
+      {VARCHAR(), BIGINT(), INTEGER(), decimalType});
+  velox_connector::ColumnHandleMap assignments;
+  for (const auto& name : tableType->names()) {
+    assignments[name] = makeHandle(
+        name,
+        tableType->findChild(name),
+        name == "region" ? HiveColumnHandle::ColumnType::kPartitionKey
+                         : HiveColumnHandle::ColumnType::kRegular);
+  }
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(kCudfDeltaConnectorId)
+                  .outputType(tableType)
+                  .dataColumns(tableType)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+  auto splits = makeDeltaSplits(dataFile->getPath(), {{"region", "US"}});
+  auto second = makeDeltaSplits(dataFile->getPath(), {{"region", "US"}});
+  splits.insert(splits.end(), second.begin(), second.end());
+  auto expected = makeRowVector(
+      tableType->names(),
+      {makeFlatVector<std::string>({"US", "US"}),
+       data->childAt(0),
+       makeNullConstant(TypeKind::INTEGER, 2),
+       data->childAt(1)});
+  AssertQueryBuilder(plan).maxDrivers(1).splits(splits).assertResults(
+      {expected, expected});
+}
+
+TEST_F(CudfDeltaReadTest, columnMappingMissingPhysicalColumn) {
+  auto data = makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 2})});
+  auto dataFile = TempFilePath::create();
+  writeToFile(dataFile->getPath(), data);
+  const auto tableType = ROW({"id", "missing"}, {BIGINT(), BIGINT()});
+  velox_connector::ColumnHandleMap assignments;
+  assignments["id"] = makeHandle("id", BIGINT());
+  assignments["missing"] = makeHandle("missing", BIGINT());
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(kCudfDeltaConnectorId)
+                  .outputType(tableType)
+                  .dataColumns(tableType)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+  auto expected = makeRowVector(
+      tableType->names(),
+      {data->childAt(0), makeNullConstant(TypeKind::BIGINT, 2)});
+  for (auto mode : {velox_delta::DeltaColumnMappingMode::kNone,
+                    velox_delta::DeltaColumnMappingMode::kName}) {
+    AssertQueryBuilder(plan)
+        .splits(makeDeltaSplits(dataFile->getPath(), {}, {}, false, mode))
+        .assertResults({expected});
+  }
+  VELOX_ASSERT_USER_THROW(
+      AssertQueryBuilder(plan)
+          .splits(makeDeltaSplits(
+              dataFile->getPath(), {}, {}, false,
+              velox_delta::DeltaColumnMappingMode::kId))
+          .copyResults(pool()),
+      "field-id resolution is not supported");
 }
 
 TEST_F(CudfDeltaReadTest, gpuScanCapability) {
