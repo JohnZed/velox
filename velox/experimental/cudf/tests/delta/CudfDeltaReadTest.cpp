@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/connectors/hive/delta/CudfDeltaConnector.h"
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/TableHandle.h"
@@ -64,7 +65,8 @@ class CudfDeltaReadTest : public CudfHiveConnectorTestBase {
       const std::string& dataFilePath,
       const std::unordered_map<std::string, std::optional<std::string>>&
           partitionKeys = {},
-      const std::unordered_map<std::string, std::string>& infoColumns = {}) {
+      const std::unordered_map<std::string, std::string>& infoColumns = {},
+      bool hasDeletionVector = false) {
     const auto fileSize = filesystems::getFileSystem(dataFilePath, nullptr)
                               ->openFileForRead(dataFilePath)
                               ->size();
@@ -80,7 +82,9 @@ class CudfDeltaReadTest : public CudfHiveConnectorTestBase {
             {"table_format", "hive-delta"}},
         nullptr,
         /*cacheable=*/true,
-        infoColumns)};
+        infoColumns,
+        /*fileProperties=*/std::nullopt,
+        hasDeletionVector)};
   }
 
   static std::shared_ptr<HiveColumnHandle> makeHandle(
@@ -240,6 +244,49 @@ TEST_F(CudfDeltaReadTest, deltaPartitionEncoding) {
                                {"empty", ""},
                                {"null_value", std::nullopt}}))
       .assertResults({expected});
+}
+
+TEST_F(CudfDeltaReadTest, rejectsDeletionVectors) {
+  auto data = makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto dataFile = TempFilePath::create();
+  writeToFile(dataFile->getPath(), data);
+
+  const auto tableType = ROW({"id", "region"}, {BIGINT(), VARCHAR()});
+  // Cover physical reads, synthesized-only reads, and zero-column counts.
+  for (const auto& outputType :
+       {ROW({"id"}, {BIGINT()}), ROW({"region"}, {VARCHAR()}), ROW({}, {})}) {
+    SCOPED_TRACE(outputType->toString());
+    velox_connector::ColumnHandleMap assignments;
+    for (const auto& name : outputType->names()) {
+      assignments[name] = makeHandle(
+          name,
+          tableType->findChild(name),
+          name == "region" ? HiveColumnHandle::ColumnType::kPartitionKey
+                           : HiveColumnHandle::ColumnType::kRegular);
+    }
+    auto plan = PlanBuilder()
+                    .startTableScan()
+                    .connectorId(kCudfDeltaConnectorId)
+                    .outputType(outputType)
+                    .dataColumns(tableType)
+                    .assignments(assignments)
+                    .endTableScan()
+                    .singleAggregation({}, {"count(1)"})
+                    .planNode();
+    auto expectedCount = makeRowVector({"a0"}, {makeFlatVector<int64_t>({3})});
+    AssertQueryBuilder(plan)
+        .splits(makeDeltaSplits(dataFile->getPath(), {{"region", "US"}}))
+        .assertResults({expectedCount});
+
+    VELOX_ASSERT_USER_THROW(
+        AssertQueryBuilder(plan)
+            .splits(makeDeltaSplits(dataFile->getPath(),
+                                    {{"region", "US"}},
+                                    {},
+                                    /*hasDeletionVector=*/true))
+            .copyResults(pool()),
+        "Reading Delta files with a deletion vector is not supported.");
+  }
 }
 
 TEST_F(CudfDeltaReadTest, gpuScanCapability) {
