@@ -25,6 +25,7 @@
 #include "velox/common/io/Options.h"
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/FileHandle.h"
+#include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/dwio/common/Statistics.h"
 #include "velox/type/Type.h"
@@ -47,23 +48,17 @@ using CudfParquetReader =
     cudf::io::parquet::experimental::hybrid_scan_multifile;
 using CudfParquetReaderPtr = std::unique_ptr<CudfParquetReader>;
 
-/// Normalizes decimal columns, recursively, to their logical Velox types.
+/// Converts read columns, recursively, to the physical form of their Velox
+/// types:
+///  - Decimals get their logical scale and storage width (DECIMAL64 for short,
+///    DECIMAL128 for long decimals).
+///  - TIMESTAMP WITH TIME ZONE timestamps are packed into Velox's BIGINT form,
+///    (UTC millis << 12) | zone key, stamped with the UTC key. cuDF has no
+///    zoned timestamp type, so the Parquet reader returns them as plain
+///    timestamps.
 /// columnTypes must describe every column after numPrependedColumns, which
 /// are left unchanged. Casts and buffer releases use the supplied stream.
-std::unique_ptr<cudf::table> castDecimalColumnsToVeloxTypes(
-    std::unique_ptr<cudf::table>&& table,
-    std::span<const TypePtr> columnTypes,
-    size_t numPrependedColumns,
-    cuda::stream_ref stream,
-    rmm::device_async_resource_ref mr);
-
-/// Packs top-level TIMESTAMP WITH TIME ZONE columns into Velox's BIGINT
-/// representation (UTC millis << 12 | zone key), stamped with the UTC zone key.
-/// cuDF has no zoned timestamp type, so the Parquet reader returns these
-/// columns as plain timestamps; Velox operators and the cuDF-to-Velox
-/// conversion expect the packed form. columnTypes must describe every column
-/// after numPrependedColumns, which are left unchanged.
-std::unique_ptr<cudf::table> packTimestampWithTimeZoneColumns(
+std::unique_ptr<cudf::table> castColumnsToVeloxTypes(
     std::unique_ptr<cudf::table>&& table,
     std::span<const TypePtr> columnTypes,
     size_t numPrependedColumns,
@@ -80,9 +75,9 @@ std::unique_ptr<cudf::table> packTimestampWithTimeZoneColumns(
 /// column handles are needed because connectors such as Delta exclude
 /// partition columns from dataColumns but still allow filters on them; the
 /// handles are the only place a filter-only partition column's type is
-/// recorded. Presto's Hive connector sends no filter column handles, so for
-/// plain Hive a filter-only partition column still fails here, now with an
-/// explicit message (see findUnsupportedCudfHiveScanColumn()).
+/// recorded. Presto's Hive connector sends no filter column handles, so plain
+/// Hive scans with a filter-only partition column stay on the CPU (see
+/// CudfHiveConnector::unsupportedGpuScanReason()).
 TypePtr resolveScanColumnType(
     const ::facebook::velox::connector::hive::HiveTableHandle& tableHandle,
     const std::string& name,
@@ -172,9 +167,15 @@ class CudfSplitReader : public NvtxHelper {
   // Read file metadatas.
   void fileMetaDatas();
 
-  // Validates that read TIMESTAMP WITH TIME ZONE columns can be packed: the
-  // column must be top-level and stored UTC-normalized in the Parquet file.
-  // Mirrors the CPU Parquet reader's TimestampColumnReader checks.
+  // Hive reader settings, e.g. how to parse partition values, built from the
+  // connector config. Subclasses use this rather than taking their own copy.
+  const ::facebook::velox::connector::hive::HiveConfig& hiveConfig() const {
+    return hiveConfig_;
+  }
+
+  // Rejects TIMESTAMP WITH TIME ZONE reads of Parquet timestamps that are not
+  // UTC-normalized, which hold wall clock readings in an unrecorded zone and so
+  // have no instant to pack. Mirrors the CPU Parquet TimestampColumnReader.
   void checkTimestampWithTimeZoneColumns() const;
 
   // Return the logical subfield filter AST used after reading.
@@ -250,6 +251,8 @@ class CudfSplitReader : public NvtxHelper {
   void releaseCurrentPassData();
 
   std::shared_ptr<CudfHiveConfig> cudfHiveConfig_;
+  // Hive reader settings from the same connector config as 'cudfHiveConfig_'.
+  const ::facebook::velox::connector::hive::HiveConfig hiveConfig_;
   memory::MemoryPool* pool_;
 
   // cuDF split reader stuff.

@@ -15,9 +15,7 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
-#include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
-#include "velox/experimental/cudf/connectors/hive/delta/CudfDeltaConnector.h"
-#include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergConnector.h"
+#include "velox/experimental/cudf/connectors/hive/CudfTableScanSupport.h"
 #include "velox/experimental/cudf/exec/CudfAggregation.h"
 #include "velox/experimental/cudf/exec/CudfAssignUniqueId.h"
 #include "velox/experimental/cudf/exec/CudfBatchConcat.h"
@@ -130,53 +128,23 @@ class TableScanAdapter : public OperatorAdapter {
     }
     auto const& connector = velox::connector::ConnectorRegistry::tryGet(
         tableScanNode->tableHandle()->connectorId());
-    auto cudfHiveConnector = std::dynamic_pointer_cast<
-        facebook::velox::cudf_velox::connector::hive::CudfHiveConnector>(
-        connector);
-    auto cudfDeltaConnector =
-        std::dynamic_pointer_cast<facebook::velox::cudf_velox::connector::hive::
-                                      delta::CudfDeltaConnector>(connector);
-    auto cudfIcebergConnector =
-        std::dynamic_pointer_cast<facebook::velox::cudf_velox::connector::hive::
-                                      iceberg::CudfIcebergConnector>(connector);
-
-    bool canRunOnGPU = cudfHiveConnector != nullptr or
-        cudfDeltaConnector != nullptr or cudfIcebergConnector != nullptr;
-
-    if (cudfDeltaConnector != nullptr &&
-        !connector::hive::delta::isCudfDeltaScanSupported(
-            tableScanNode->assignments())) {
+    // Every cuDF connector (Hive, Delta, Iceberg) reports whether its reader
+    // can produce the scan; other connectors have no cuDF reader.
+    const auto scanSupport =
+        std::dynamic_pointer_cast<const connector::hive::CudfTableScanSupport>(
+            connector);
+    if (scanSupport == nullptr) {
       LOG_FALLBACK(
-          "Delta table scan uses a column shape not supported by the cuDF "
-          "reader, PlanNode id: {}",
+          "TableScan connector has no cuDF reader, PlanNode id: {}",
           planNode->id());
       return false;
     }
-
-    // The plain Hive cuDF reader only reads columns stored in the Parquet
-    // file. Keep scans that need partition or synthesized column values on the
-    // CPU, which produces them, instead of failing or returning wrong results
-    // on the GPU. Delta and Iceberg have their own cuDF readers that
-    // synthesize these columns, so they are not subject to this check.
-    if (cudfHiveConnector != nullptr) {
-      if (const auto column =
-              connector::hive::findUnsupportedCudfHiveScanColumn(
-                  tableScanNode->tableHandle(), tableScanNode->assignments())) {
-        LOG_FALLBACK(
-            "cuDF Hive reader does not support partition or synthesized column '{}', PlanNode id: {}",
-            column.value(),
-            planNode->id());
-        return false;
-      }
+    if (const auto reason = scanSupport->unsupportedGpuScanReason(
+            tableScanNode->tableHandle(), tableScanNode->assignments())) {
+      LOG_FALLBACK("{}, PlanNode id: {}", reason.value(), planNode->id());
+      return false;
     }
-
-    if (!canRunOnGPU) {
-      LOG_FALLBACK(
-          "TableScan connector is not CudfHiveConnector, CudfDeltaConnector, or CudfIcebergConnector, PlanNode id: {}",
-          planNode->id());
-    }
-
-    return canRunOnGPU;
+    return true;
   }
 
   bool acceptsGpuInput() const override {

@@ -79,10 +79,6 @@ CudfHiveDataSource::CudfHiveDataSource(
     readColumnNames_.emplace_back(handle->name());
     scanColumnNames.emplace_back(handle->name());
     scanColumnTypes.emplace_back(handle->dataType());
-    if (handle->columnType() != hive::HiveColumnHandle::ColumnType::kRegular &&
-        !firstNonFileColumn_.has_value()) {
-      firstNonFileColumn_ = handle->name();
-    }
   }
   // Types of the scan's own columns, keyed by table column name. Used as the
   // last resort when resolving read column types, so that a projected
@@ -200,18 +196,6 @@ CudfHiveDataSource::CudfHiveDataSource(
 }
 
 std::unique_ptr<CudfSplitReader> CudfHiveDataSource::createCudfSplitReader() {
-  // The Delta and Iceberg data sources override this method with readers that
-  // synthesize partition and info columns. The plain Hive reader only reads
-  // columns stored in the Parquet file, so a partition or synthesized column
-  // would otherwise be requested from the file and silently missing. The plan
-  // adapter already routes such scans to the CPU
-  // (findUnsupportedCudfHiveScanColumn()); this is a backstop with a clear
-  // message for scans that reach the GPU reader anyway.
-  if (firstNonFileColumn_.has_value()) {
-    VELOX_NYI(
-        "The cuDF Hive reader cannot produce partition or synthesized column '{}'",
-        firstNonFileColumn_.value());
-  }
   return std::make_unique<CudfSplitReader>(
       split_,
       tableHandle_,
