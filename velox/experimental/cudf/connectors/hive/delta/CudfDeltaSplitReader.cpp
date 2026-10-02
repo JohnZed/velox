@@ -93,6 +93,12 @@ cudf::ast::expression const* CudfDeltaSplitReader::pushdownFilter() const {
 
 void CudfDeltaSplitReader::prepareSplitInternal(
     dwio::common::RuntimeStats& /*runtimeStats*/) {
+  // Reading files with logically deleted rows is not yet supported. Reject
+  // early rather than reading the file and returning the deleted rows.
+  VELOX_USER_CHECK(
+      !deltaSplit_->hasDeletionVector,
+      "Reading Delta files with a deletion vector is not supported.");
+
   resetDeltaSplit();
   cacheSchemaFromMetadata();
   adaptColumns();
