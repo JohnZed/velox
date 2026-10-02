@@ -63,7 +63,6 @@ std::unique_ptr<CudfSplitReader> CudfDeltaDataSource::createCudfSplitReader() {
                                                 hiveConfig_,
                                                 ioStatistics_,
                                                 ioStats_,
-                                                useExperimentalCudfReader_,
                                                 subfieldFilterAst_);
 }
 

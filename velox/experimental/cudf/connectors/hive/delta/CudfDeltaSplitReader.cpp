@@ -52,7 +52,6 @@ CudfDeltaSplitReader::CudfDeltaSplitReader(
     const std::shared_ptr<const velox_hive::HiveConfig>& hiveConfig,
     const std::shared_ptr<io::IoStatistics>& ioStatistics,
     const std::shared_ptr<IoStats>& ioStats,
-    bool useExperimentalCudfReader,
     cudf::ast::expression const* subfieldFilterExpr)
     : CudfSplitReader(std::move(split),
                       std::move(tableHandle),
@@ -64,7 +63,6 @@ CudfDeltaSplitReader::CudfDeltaSplitReader(
                       cudfHiveConfig,
                       ioStatistics,
                       ioStats,
-                      useExperimentalCudfReader,
                       subfieldFilterExpr),
       deltaSplit_(std::move(deltaSplit)),
       hiveConfig_(hiveConfig) {
@@ -74,17 +72,10 @@ CudfDeltaSplitReader::CudfDeltaSplitReader(
 void CudfDeltaSplitReader::resetDeltaSplit() {
   injectedColumns_.clear();
   fileColumnNames_.clear();
-  fileReadType_.reset();
   splitRowCount_ = 0;
   noColumnsToRead_ = false;
   syntheticTableProduced_ = false;
   deferSubfieldFilter_ = false;
-}
-
-void CudfDeltaSplitReader::setupReader() {
-  if (not noColumnsToRead_) {
-    CudfSplitReader::setupReader();
-  }
 }
 
 cudf::ast::expression const* CudfDeltaSplitReader::pushdownFilter() const {
@@ -109,7 +100,9 @@ void CudfDeltaSplitReader::prepareSplitInternal(
     VLOG(1) << "Delta subfield filter is deferred until synthesized columns "
                "are available";
   }
-  setupReader();
+  if (not noColumnsToRead_) {
+    createCudfReader();
+  }
 }
 
 rmm::device_async_resource_ref
@@ -250,6 +243,10 @@ void CudfDeltaSplitReader::adaptColumns() {
       injectedColumns_.push_back(
           {index, fieldName, partition->second, veloxType});
     } else if (not fileColumnNames_.contains(fieldName)) {
+      VELOX_USER_CHECK(
+          deltaSplit_->columnMappingMode != velox_delta::DeltaColumnMappingMode::kId,
+          "Delta id-mode column '{}' is missing from the Parquet file; field-id resolution is not supported.",
+          fieldName);
       injectedColumns_.push_back({index, fieldName, std::nullopt, veloxType});
     } else {
       fileReadNames.push_back(fieldName);
@@ -258,7 +255,7 @@ void CudfDeltaSplitReader::adaptColumns() {
   }
 
   readColumnNames_ = std::move(fileReadNames);
-  fileReadType_ = ROW(readColumnNames_, std::move(fileReadTypes));
+  readColumnTypes_ = std::move(fileReadTypes);
 }
 
 std::unique_ptr<cudf::scalar> CudfDeltaSplitReader::makeInjectedScalar(
