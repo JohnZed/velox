@@ -38,8 +38,6 @@
 
 namespace facebook::velox::cudf_velox::connector::hive::delta {
 
-namespace velox_hive = ::facebook::velox::connector::hive;
-
 CudfDeltaSplitReader::CudfDeltaSplitReader(
     std::shared_ptr<CudfHiveConnectorSplit> split,
     std::shared_ptr<const velox_delta::HiveDeltaSplit> deltaSplit,
@@ -50,23 +48,22 @@ CudfDeltaSplitReader::CudfDeltaSplitReader(
     folly::Executor* executor,
     const ::facebook::velox::connector::ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<CudfHiveConfig>& cudfHiveConfig,
-    const std::shared_ptr<const velox_hive::HiveConfig>& hiveConfig,
     const std::shared_ptr<io::IoStatistics>& ioStatistics,
     const std::shared_ptr<IoStats>& ioStats,
     cudf::ast::expression const* subfieldFilterExpr)
-    : CudfSplitReader(std::move(split),
-                      std::move(tableHandle),
-                      outputType,
-                      readColumnNames,
-                      fileHandleFactory,
-                      executor,
-                      connectorQueryCtx,
-                      cudfHiveConfig,
-                      ioStatistics,
-                      ioStats,
-                      subfieldFilterExpr),
-      deltaSplit_(std::move(deltaSplit)),
-      hiveConfig_(hiveConfig) {
+    : CudfSplitReader(
+          std::move(split),
+          std::move(tableHandle),
+          outputType,
+          readColumnNames,
+          fileHandleFactory,
+          executor,
+          connectorQueryCtx,
+          cudfHiveConfig,
+          ioStatistics,
+          ioStats,
+          subfieldFilterExpr),
+      deltaSplit_(std::move(deltaSplit)) {
   VELOX_CHECK_NOT_NULL(deltaSplit_);
 }
 
@@ -169,9 +166,10 @@ CudfDeltaSplitReader::readNextChunk() {
 
 void CudfDeltaSplitReader::cacheSchemaFromMetadata() {
   fileMetaDatas();
-  VELOX_CHECK_EQ(fileMetaData_.size(),
-                 1,
-                 "Expected one Parquet footer for a Delta data file");
+  VELOX_CHECK_EQ(
+      fileMetaData_.size(),
+      1,
+      "Expected one Parquet footer for a Delta data file");
 
   const auto& metadata = fileMetaData_.front();
   VELOX_CHECK(not metadata.schema.empty(), "Parquet footer schema is empty");
@@ -182,9 +180,10 @@ void CudfDeltaSplitReader::cacheSchemaFromMetadata() {
   const auto& root = metadata.schema.front();
   fileColumnNames_.reserve(root.children_idx.size());
   for (const auto childIndex : root.children_idx) {
-    VELOX_CHECK_LT(childIndex,
-                   metadata.schema.size(),
-                   "Parquet schema child index is out of range");
+    VELOX_CHECK_LT(
+        childIndex,
+        metadata.schema.size(),
+        "Parquet schema child index is out of range");
     fileColumnNames_.insert(metadata.schema[childIndex].name);
   }
 }
@@ -238,7 +237,8 @@ void CudfDeltaSplitReader::adaptColumns() {
           {index, fieldName, partition->second, veloxType});
     } else if (not fileColumnNames_.contains(fieldName)) {
       VELOX_USER_CHECK(
-          deltaSplit_->columnMappingMode != velox_delta::DeltaColumnMappingMode::kId,
+          deltaSplit_->columnMappingMode !=
+              velox_delta::DeltaColumnMappingMode::kId,
           "Delta id-mode column '{}' is missing from the Parquet file; field-id resolution is not supported.",
           fieldName);
       injectedColumns_.push_back({index, fieldName, std::nullopt, veloxType});
@@ -256,7 +256,7 @@ std::unique_ptr<cudf::scalar> CudfDeltaSplitReader::makeInjectedScalar(
     const InjectedColumn& column) const {
   try {
     const bool readAsLocalTime =
-        hiveConfig_->readTimestampPartitionValueAsLocalTime(
+        hiveConfig().readTimestampPartitionValueAsLocalTime(
             connectorQueryCtx_->sessionProperties());
     // Match the CPU DeltaSplitReader: when the session adjusts timestamps to
     // its time zone, timestamp partition values are interpreted in that zone.
@@ -320,11 +320,7 @@ std::unique_ptr<cudf::column> CudfDeltaSplitReader::makeAllNullColumn(
         zero, numRows + 1, stream_, memoryResource);
     auto elements = makeAllNullColumn(type->childAt(0), 0, memoryResource);
     return cudf::make_lists_column(
-        numRows,
-        std::move(offsets),
-        std::move(elements),
-        numRows,
-        nullMask());
+        numRows, std::move(offsets), std::move(elements), numRows, nullMask());
   }
 
   auto scalar = cudf::make_default_constructed_scalar(
@@ -359,8 +355,8 @@ std::unique_ptr<cudf::table> CudfDeltaSplitReader::buildOutputTable(
   if (physicalColumns.empty() and injectedColumns_.empty()) {
     cudf::numeric_scalar<int8_t> zero{0, true, stream_, memoryResource};
     std::vector<std::unique_ptr<cudf::column>> dummyColumns;
-    dummyColumns.push_back(cudf::make_column_from_scalar(
-        zero, numRows, stream_, memoryResource));
+    dummyColumns.push_back(
+        cudf::make_column_from_scalar(zero, numRows, stream_, memoryResource));
     return std::make_unique<cudf::table>(std::move(dummyColumns));
   }
 
@@ -377,16 +373,19 @@ std::unique_ptr<cudf::table> CudfDeltaSplitReader::buildOutputTable(
       outputColumns.push_back(
           makeInjectedColumn(*injected++, numRows, memoryResource));
     } else {
-      VELOX_CHECK(physical != physicalColumns.end(),
-                  "Physical Delta column index is out of range");
+      VELOX_CHECK(
+          physical != physicalColumns.end(),
+          "Physical Delta column index is out of range");
       outputColumns.push_back(std::move(*physical++));
     }
   }
 
-  VELOX_CHECK(physical == physicalColumns.end(),
-              "Not all physical Delta columns were consumed");
-  VELOX_CHECK(injected == injectedColumns_.end(),
-              "Not all synthesized Delta columns were consumed");
+  VELOX_CHECK(
+      physical == physicalColumns.end(),
+      "Not all physical Delta columns were consumed");
+  VELOX_CHECK(
+      injected == injectedColumns_.end(),
+      "Not all synthesized Delta columns were consumed");
   return std::make_unique<cudf::table>(std::move(outputColumns));
 }
 

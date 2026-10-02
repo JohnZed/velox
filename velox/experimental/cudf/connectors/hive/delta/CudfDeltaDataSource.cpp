@@ -16,54 +16,47 @@
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/connectors/hive/delta/CudfDeltaDataSource.h"
-#include "velox/experimental/cudf/connectors/hive/delta/CudfDeltaSplitReader.h"
 
 #include "velox/common/Casts.h"
 
 namespace facebook::velox::cudf_velox::connector::hive::delta {
 
-namespace velox_connector = ::facebook::velox::connector;
-namespace velox_delta = ::facebook::velox::connector::hive::delta;
-namespace velox_hive = ::facebook::velox::connector::hive;
-
 CudfDeltaDataSource::CudfDeltaDataSource(
     const RowTypePtr& outputType,
-    const velox_connector::ConnectorTableHandlePtr& tableHandle,
-    const velox_connector::ColumnHandleMap& columnHandles,
+    const ConnectorTableHandlePtr& tableHandle,
+    const ColumnHandleMap& columnHandles,
     FileHandleFactory* fileHandleFactory,
     folly::Executor* executor,
-    const velox_connector::ConnectorQueryCtx* connectorQueryCtx,
-    const std::shared_ptr<CudfHiveConfig>& cudfHiveConfig,
-    const std::shared_ptr<const velox_hive::HiveConfig>& hiveConfig)
-    : CudfHiveDataSource(outputType,
-                         tableHandle,
-                         columnHandles,
-                         fileHandleFactory,
-                         executor,
-                         connectorQueryCtx,
-                         cudfHiveConfig),
-      hiveConfig_(hiveConfig) {}
+    const ConnectorQueryCtx* connectorQueryCtx,
+    const std::shared_ptr<CudfHiveConfig>& cudfHiveConfig)
+    : CudfHiveDataSource(
+          outputType,
+          tableHandle,
+          columnHandles,
+          fileHandleFactory,
+          executor,
+          connectorQueryCtx,
+          cudfHiveConfig) {}
 
-void CudfDeltaDataSource::convertSplit(
-    std::shared_ptr<velox_connector::ConnectorSplit> split) {
+void CudfDeltaDataSource::convertSplit(std::shared_ptr<ConnectorSplit> split) {
   deltaSplit_ = checkedPointerCast<const velox_delta::HiveDeltaSplit>(split);
   CudfHiveDataSource::convertSplit(std::move(split));
 }
 
 std::unique_ptr<CudfSplitReader> CudfDeltaDataSource::createCudfSplitReader() {
-  return std::make_unique<CudfDeltaSplitReader>(split_,
-                                                deltaSplit_,
-                                                tableHandle_,
-                                                outputType_,
-                                                readColumnNames_,
-                                                fileHandleFactory_,
-                                                executor_,
-                                                connectorQueryCtx_,
-                                                cudfHiveConfig_,
-                                                hiveConfig_,
-                                                ioStatistics_,
-                                                ioStats_,
-                                                subfieldFilterAst_);
+  return std::make_unique<CudfDeltaSplitReader>(
+      split_,
+      deltaSplit_,
+      tableHandle_,
+      outputType_,
+      readColumnNames_,
+      fileHandleFactory_,
+      executor_,
+      connectorQueryCtx_,
+      cudfHiveConfig_,
+      ioStatistics_,
+      ioStats_,
+      subfieldFilterAst_);
 }
 
 } // namespace facebook::velox::cudf_velox::connector::hive::delta

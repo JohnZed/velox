@@ -15,7 +15,7 @@
 if(NOT VELOX_DISABLE_GOOGLETEST)
   add_executable(
     velox_hive_delta_test
-    ../../iceberg/tests/Main.cpp
+    Main.cpp
     HiveDeltaSplitTest.cpp
     PartitionValueConversionTest.cpp
     DeltaSplitReaderTest.cpp)

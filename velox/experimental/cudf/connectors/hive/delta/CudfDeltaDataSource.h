@@ -17,15 +17,9 @@
 #pragma once
 
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
-
-#include "velox/connectors/hive/HiveConfig.h"
-#include "velox/connectors/hive/delta/HiveDeltaSplit.h"
+#include "velox/experimental/cudf/connectors/hive/delta/CudfDeltaSplitReader.h"
 
 namespace facebook::velox::cudf_velox::connector::hive::delta {
-
-namespace velox_connector = ::facebook::velox::connector;
-namespace velox_delta = ::facebook::velox::connector::hive::delta;
-namespace velox_hive = ::facebook::velox::connector::hive;
 
 /// Creates cuDF split readers while retaining the Delta-specific split
 /// metadata supplied by the CPU-compatible HiveDeltaSplit contract.
@@ -34,13 +28,12 @@ class CudfDeltaDataSource : public ::facebook::velox::cudf_velox::connector::
  public:
   CudfDeltaDataSource(
       const RowTypePtr& outputType,
-      const velox_connector::ConnectorTableHandlePtr& tableHandle,
-      const velox_connector::ColumnHandleMap& columnHandles,
+      const ConnectorTableHandlePtr& tableHandle,
+      const ColumnHandleMap& columnHandles,
       FileHandleFactory* fileHandleFactory,
       folly::Executor* executor,
-      const velox_connector::ConnectorQueryCtx* connectorQueryCtx,
-      const std::shared_ptr<CudfHiveConfig>& cudfHiveConfig,
-      const std::shared_ptr<const velox_hive::HiveConfig>& hiveConfig);
+      const ConnectorQueryCtx* connectorQueryCtx,
+      const std::shared_ptr<CudfHiveConfig>& cudfHiveConfig);
 
  protected:
   /// Creates the Delta-specific split reader for the current split.
@@ -50,9 +43,6 @@ class CudfDeltaDataSource : public ::facebook::velox::cudf_velox::connector::
   void convertSplit(std::shared_ptr<ConnectorSplit> split) override;
 
  private:
-  // Controls parsing of partition constants consistently with the CPU reader.
-  std::shared_ptr<const velox_hive::HiveConfig> hiveConfig_;
-
   // Preserves Delta-specific partition and information-column metadata.
   std::shared_ptr<const velox_delta::HiveDeltaSplit> deltaSplit_;
 };
