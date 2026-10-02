@@ -15,6 +15,7 @@
 if(NOT VELOX_DISABLE_GOOGLETEST)
   add_executable(
     velox_hive_delta_test
+    ../../iceberg/tests/Main.cpp
     HiveDeltaSplitTest.cpp
     PartitionValueConversionTest.cpp
     DeltaSplitReaderTest.cpp)
@@ -35,7 +36,6 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     velox_memory
     velox_core
     GTest::gtest
-    GTest::gtest_main
     ${TEST_LINK_LIBS}
   )
 endif()
