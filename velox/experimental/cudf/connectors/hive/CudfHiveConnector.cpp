@@ -18,10 +18,61 @@
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/connectors/hive/HiveDataSource.h"
+#include "velox/connectors/hive/TableHandle.h"
+
+#include <unordered_set>
 
 namespace facebook::velox::cudf_velox::connector::hive {
+
+std::optional<std::string> findUnsupportedCudfHiveScanColumn(
+    const ConnectorTableHandlePtr& tableHandle,
+    const ColumnHandleMap& assignments) {
+  using HiveColumnHandle = ::facebook::velox::connector::hive::HiveColumnHandle;
+  const auto hiveTableHandle = std::dynamic_pointer_cast<
+      const ::facebook::velox::connector::hive::HiveTableHandle>(tableHandle);
+  if (hiveTableHandle == nullptr) {
+    return std::nullopt;
+  }
+
+  std::unordered_set<std::string> regularColumns;
+  for (const auto& [_, columnHandle] : assignments) {
+    const auto* handle =
+        dynamic_cast<const HiveColumnHandle*>(columnHandle.get());
+    if (handle == nullptr) {
+      continue;
+    }
+    if (handle->columnType() != HiveColumnHandle::ColumnType::kRegular) {
+      return handle->name();
+    }
+    regularColumns.insert(handle->name());
+  }
+
+  // Without dataColumns a missing filter column cannot be told apart from a
+  // data column, so only the assignments above can be checked.
+  const auto& dataColumns = hiveTableHandle->dataColumns();
+  if (dataColumns == nullptr) {
+    return std::nullopt;
+  }
+  const auto isFileColumn = [&](const std::string& name) {
+    return regularColumns.contains(name) || dataColumns->containsChild(name);
+  };
+  for (const auto& [subfield, _] : hiveTableHandle->subfieldFilters()) {
+    if (!isFileColumn(subfield.baseName())) {
+      return subfield.baseName();
+    }
+  }
+  if (const auto& remainingFilter = hiveTableHandle->remainingFilter()) {
+    for (const auto& name : referencedInputFields(remainingFilter)) {
+      if (!isFileColumn(name)) {
+        return name;
+      }
+    }
+  }
+  return std::nullopt;
+}
 
 using namespace facebook::velox::connector;
 
@@ -44,7 +95,13 @@ std::unique_ptr<DataSource> CudfHiveConnector::createDataSource(
   // TODO (dm): Make this ^^^ happen
   // Problem: this information is in split, not table handle
 
-  if (cudfIsRegistered()) {
+  // Must agree with the cuDF table scan adapter, which keeps scans that need
+  // partition or synthesized columns on the CPU: such a scan runs as a CPU
+  // TableScan and therefore needs the CPU HiveDataSource, which produces those
+  // columns, rather than the cuDF data source, which cannot.
+  if (cudfIsRegistered() &&
+      !findUnsupportedCudfHiveScanColumn(tableHandle, columnHandles)
+           .has_value()) {
     return std::make_unique<CudfHiveDataSource>(
         outputType,
         tableHandle,

@@ -153,6 +153,23 @@ class TableScanAdapter : public OperatorAdapter {
       return false;
     }
 
+    // The plain Hive cuDF reader only reads columns stored in the Parquet
+    // file. Keep scans that need partition or synthesized column values on the
+    // CPU, which produces them, instead of failing or returning wrong results
+    // on the GPU. Delta and Iceberg have their own cuDF readers that
+    // synthesize these columns, so they are not subject to this check.
+    if (cudfHiveConnector != nullptr) {
+      if (const auto column =
+              connector::hive::findUnsupportedCudfHiveScanColumn(
+                  tableScanNode->tableHandle(), tableScanNode->assignments())) {
+        LOG_FALLBACK(
+            "cuDF Hive reader does not support partition or synthesized column '{}', PlanNode id: {}",
+            column.value(),
+            planNode->id());
+        return false;
+      }
+    }
+
     if (!canRunOnGPU) {
       LOG_FALLBACK(
           "TableScan connector is not CudfHiveConnector, CudfDeltaConnector, or CudfIcebergConnector, PlanNode id: {}",

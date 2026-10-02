@@ -24,6 +24,9 @@
 #include "velox/connectors/hive/delta/HiveDeltaSplit.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/expression/ExprToSubfieldFilter.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::cudf_velox::exec::test {
 
@@ -387,6 +390,148 @@ TEST_F(CudfDeltaReadTest, gpuScanCapability) {
       BIGINT(),
       std::move(requiredSubfields));
   EXPECT_FALSE(cudf_delta::isCudfDeltaScanSupported(assignments));
+}
+
+// Presto's Delta connector leaves partition columns out of dataColumns and
+// describes them only through filter column handles. Filters on such columns,
+// alone or combined with data column filters, must resolve their types from
+// the handles. Filters are built directly, as Presto sends them, because
+// PlanBuilder parses filter strings against dataColumns only.
+TEST_F(CudfDeltaReadTest, partitionColumnsOutsideDataColumns) {
+  auto data = makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto dataFile = TempFilePath::create();
+  writeToFile(dataFile->getPath(), data);
+
+  auto dataColumns = ROW({"id"}, {BIGINT()});
+  auto idHandle = makeHandle("id", BIGINT());
+  auto regionHandle = makeHandle(
+      "region", VARCHAR(), HiveColumnHandle::ColumnType::kPartitionKey);
+
+  // Filter-only partition column.
+  const auto makeFilterOnlyPlan = [&](std::unique_ptr<common::Filter> filter) {
+    common::SubfieldFilters filters;
+    filters[common::Subfield("region")] = std::move(filter);
+    return PlanBuilder()
+        .startTableScan()
+        .connectorId(kCudfDeltaConnectorId)
+        .outputType(ROW({"id"}, {BIGINT()}))
+        .dataColumns(dataColumns)
+        .assignments({{"id", idHandle}})
+        .filterColumnHandles({idHandle, regionHandle})
+        .subfieldFiltersMap(filters)
+        .endTableScan()
+        .planNode();
+  };
+  auto allRows = makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto noRows =
+      makeRowVector({"id"}, {makeFlatVector<int64_t>(std::vector<int64_t>{})});
+  AssertQueryBuilder(makeFilterOnlyPlan(velox::exec::equal("US")))
+      .splits(makeDeltaSplits(dataFile->getPath(), {{"region", "US"}}))
+      .assertResults({allRows});
+  AssertQueryBuilder(makeFilterOnlyPlan(velox::exec::equal("CA")))
+      .splits(makeDeltaSplits(dataFile->getPath(), {{"region", "US"}}))
+      .assertResults({noRows});
+  AssertQueryBuilder(makeFilterOnlyPlan(velox::exec::isNull()))
+      .splits(makeDeltaSplits(dataFile->getPath(), {{"region", std::nullopt}}))
+      .assertResults({allRows});
+  AssertQueryBuilder(makeFilterOnlyPlan(velox::exec::isNotNull()))
+      .splits(makeDeltaSplits(dataFile->getPath(), {{"region", std::nullopt}}))
+      .assertResults({noRows});
+
+  // Projected partition column filtered together with a data column.
+  common::SubfieldFilters combinedFilters;
+  combinedFilters[common::Subfield("region")] = velox::exec::equal("US");
+  combinedFilters[common::Subfield("id")] = velox::exec::greaterThan(1);
+  auto combinedPlan =
+      PlanBuilder()
+          .startTableScan()
+          .connectorId(kCudfDeltaConnectorId)
+          .outputType(ROW({"id", "region"}, {BIGINT(), VARCHAR()}))
+          .dataColumns(dataColumns)
+          .assignments({{"id", idHandle}, {"region", regionHandle}})
+          .filterColumnHandles({idHandle, regionHandle})
+          .subfieldFiltersMap(combinedFilters)
+          .endTableScan()
+          .planNode();
+  auto expected = makeRowVector(
+      {"id", "region"},
+      {makeFlatVector<int64_t>({2, 3}),
+       makeFlatVector<std::string>({"US", "US"})});
+  AssertQueryBuilder(combinedPlan)
+      .splits(makeDeltaSplits(dataFile->getPath(), {{"region", "US"}}))
+      .assertResults({expected});
+}
+
+// cuDF has no zoned timestamp type; the reader packs UTC Parquet timestamps
+// into Velox's TIMESTAMP WITH TIME ZONE representation.
+TEST_F(CudfDeltaReadTest, timestampWithTimeZoneColumn) {
+  const std::vector<int64_t> millis{0, 1'631'081'471'000, -86'400'000};
+  auto data = makeRowVector(
+      {"ts"},
+      {makeNullableFlatVector<Timestamp>(
+          {Timestamp::fromMillis(millis[0]),
+           Timestamp::fromMillis(millis[1]),
+           std::nullopt,
+           Timestamp::fromMillis(millis[2])})});
+  auto dataFile = TempFilePath::create();
+  writeToFile(dataFile->getPath(), data);
+
+  auto rowType = ROW({"ts"}, {TIMESTAMP_WITH_TIME_ZONE()});
+  auto plan =
+      PlanBuilder()
+          .startTableScan()
+          .connectorId(kCudfDeltaConnectorId)
+          .outputType(rowType)
+          .dataColumns(rowType)
+          .assignments({{"ts", makeHandle("ts", TIMESTAMP_WITH_TIME_ZONE())}})
+          .endTableScan()
+          .planNode();
+  const auto utc = tz::getTimeZoneID("UTC");
+  auto expected = makeRowVector(
+      {"ts"},
+      {makeNullableFlatVector<int64_t>(
+          {pack(millis[0], utc),
+           pack(millis[1], utc),
+           std::nullopt,
+           pack(millis[2], utc)},
+          TIMESTAMP_WITH_TIME_ZONE())});
+  AssertQueryBuilder(plan)
+      .splits(makeDeltaSplits(dataFile->getPath()))
+      .assertResults({expected});
+}
+
+// With adjust_timestamp_to_session_timezone, timestamp partition values are
+// wall clock times in the session zone, as in the CPU Delta reader.
+TEST_F(CudfDeltaReadTest, timestampPartitionValueUsesSessionTimezone) {
+  auto data = makeRowVector({"id"}, {makeFlatVector<int64_t>({1})});
+  auto dataFile = TempFilePath::create();
+  writeToFile(dataFile->getPath(), data);
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(kCudfDeltaConnectorId)
+                  .outputType(ROW({"id", "ts"}, {BIGINT(), TIMESTAMP()}))
+                  .dataColumns(ROW({"id"}, {BIGINT()}))
+                  .assignments(
+                      {{"id", makeHandle("id", BIGINT())},
+                       {"ts",
+                        makeHandle(
+                            "ts",
+                            TIMESTAMP(),
+                            HiveColumnHandle::ColumnType::kPartitionKey)}})
+                  .endTableScan()
+                  .planNode();
+  // 2021-09-08 11:11:11 in America/Los_Angeles (PDT, UTC-7).
+  auto expected = makeRowVector(
+      {"id", "ts"},
+      {makeFlatVector<int64_t>({1}),
+       makeFlatVector<Timestamp>({Timestamp(1'631'124'671, 0)})});
+  AssertQueryBuilder(plan)
+      .config(core::QueryConfig::kSessionTimezone, "America/Los_Angeles")
+      .config(core::QueryConfig::kAdjustTimestampToTimezone, "true")
+      .splits(
+          makeDeltaSplits(dataFile->getPath(), {{"ts", "2021-09-08 11:11:11"}}))
+      .assertResults({expected});
 }
 
 } // namespace
