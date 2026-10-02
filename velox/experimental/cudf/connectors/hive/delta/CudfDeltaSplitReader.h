@@ -18,7 +18,6 @@
 
 #include "velox/experimental/cudf/connectors/hive/CudfSplitReader.h"
 
-#include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/delta/HiveDeltaSplit.h"
 
 #include <optional>
@@ -28,6 +27,7 @@
 
 namespace facebook::velox::cudf_velox::connector::hive::delta {
 
+// Velox CPU Delta and Hive namespaces, shared by the cuDF Delta sources.
 namespace velox_delta = ::facebook::velox::connector::hive::delta;
 namespace velox_hive = ::facebook::velox::connector::hive;
 
@@ -45,7 +45,6 @@ class CudfDeltaSplitReader : public CudfSplitReader {
       folly::Executor* executor,
       const ::facebook::velox::connector::ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<CudfHiveConfig>& cudfHiveConfig,
-      const std::shared_ptr<const velox_hive::HiveConfig>& hiveConfig,
       const std::shared_ptr<io::IoStatistics>& ioStatistics,
       const std::shared_ptr<IoStats>& ioStats,
       cudf::ast::expression const* subfieldFilterExpr);
@@ -53,8 +52,7 @@ class CudfDeltaSplitReader : public CudfSplitReader {
  protected:
   /// Builds the physical projection and constant-injection plan for one Delta
   /// data file before constructing the cuDF reader.
-  void prepareSplitInternal(
-      dwio::common::RuntimeStats& runtimeStats) override;
+  void prepareSplitInternal(dwio::common::RuntimeStats& runtimeStats) override;
 
   /// Defers the logical filter when it must observe synthesized columns.
   cudf::ast::expression const* pushdownFilter() const override;
@@ -122,9 +120,6 @@ class CudfDeltaSplitReader : public CudfSplitReader {
 
   // Preserves the common CPU/GPU Delta split contract.
   std::shared_ptr<const velox_delta::HiveDeltaSplit> deltaSplit_;
-
-  // Controls partition parsing consistently with the CPU Hive reader.
-  std::shared_ptr<const velox_hive::HiveConfig> hiveConfig_;
 
   // Records constants and missing columns to inject after file decoding.
   std::vector<InjectedColumn> injectedColumns_;

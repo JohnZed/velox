@@ -45,21 +45,6 @@ bool containsMap(const TypePtr& type) {
 
 } // namespace
 
-bool isCudfDeltaScanSupported(const ColumnHandleMap& columnHandles) {
-  for (const auto& [_, columnHandle] : columnHandles) {
-    auto* hiveColumn =
-        dynamic_cast<const velox::connector::hive::HiveColumnHandle*>(
-            columnHandle.get());
-    if (hiveColumn == nullptr || !hiveColumn->requiredSubfields().empty() ||
-        !hiveColumn->extractions().empty() ||
-        containsMap(hiveColumn->schemaType()) ||
-        containsMap(hiveColumn->dataType())) {
-      return false;
-    }
-  }
-  return true;
-}
-
 CudfDeltaConnector::CudfDeltaConnector(
     const std::string& id,
     std::shared_ptr<const velox::config::ConfigBase> config,
@@ -69,20 +54,49 @@ CudfDeltaConnector::CudfDeltaConnector(
   VLOG(1) << "cuDF Delta connector created";
 }
 
+std::optional<std::string> CudfDeltaConnector::unsupportedGpuScanReason(
+    const ConnectorTableHandlePtr& /*tableHandle*/,
+    const ColumnHandleMap& assignments) const {
+  for (const auto& [_, columnHandle] : assignments) {
+    const auto* hiveColumn =
+        dynamic_cast<const velox::connector::hive::HiveColumnHandle*>(
+            columnHandle.get());
+    if (hiveColumn == nullptr) {
+      return "Delta table scan has a column handle that is not a HiveColumnHandle";
+    }
+    if (!hiveColumn->requiredSubfields().empty() ||
+        !hiveColumn->extractions().empty()) {
+      return fmt::format(
+          "cuDF Delta reader does not prune nested subfields of column '{}'",
+          hiveColumn->name());
+    }
+    if (containsMap(hiveColumn->schemaType()) ||
+        containsMap(hiveColumn->dataType())) {
+      return fmt::format(
+          "cuDF Delta reader does not support MAP column '{}'",
+          hiveColumn->name());
+    }
+  }
+  return std::nullopt;
+}
+
 std::unique_ptr<DataSource> CudfDeltaConnector::createDataSource(
     const RowTypePtr& outputType,
     const ConnectorTableHandlePtr& tableHandle,
     const ColumnHandleMap& columnHandles,
     ConnectorQueryCtx* connectorQueryCtx) {
-  if (cudfIsRegistered() && isCudfDeltaScanSupported(columnHandles)) {
-    return std::make_unique<CudfDeltaDataSource>(outputType,
-                                                 tableHandle,
-                                                 columnHandles,
-                                                 &fileHandleFactory_,
-                                                 ioExecutor_,
-                                                 connectorQueryCtx,
-                                                 cudfHiveConfig_,
-                                                 hiveConfig_);
+  // A scan the cuDF reader cannot produce runs as a CPU TableScan (see
+  // CudfTableScanSupport) and needs the CPU data source.
+  if (cudfIsRegistered() &&
+      !unsupportedGpuScanReason(tableHandle, columnHandles).has_value()) {
+    return std::make_unique<CudfDeltaDataSource>(
+        outputType,
+        tableHandle,
+        columnHandles,
+        &fileHandleFactory_,
+        ioExecutor_,
+        connectorQueryCtx,
+        cudfHiveConfig_);
   }
 
   return std::make_unique<velox::connector::hive::HiveDataSource>(

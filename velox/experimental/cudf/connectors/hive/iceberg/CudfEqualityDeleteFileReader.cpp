@@ -189,7 +189,7 @@ void CudfEqualityDeleteFileReader::directReadEqualityDeleteFile(
           .build();
   auto stream = cudfGlobalStreamPool().get_stream();
   auto mr = get_output_mr();
-  deleteKeyTable_ = castDecimalColumnsToVeloxTypes(
+  deleteKeyTable_ = castColumnsToVeloxTypes(
       cudf::io::read_parquet(options, stream, mr).tbl,
       equalityColumnTypes,
       /*numPrependedColumns=*/0,
