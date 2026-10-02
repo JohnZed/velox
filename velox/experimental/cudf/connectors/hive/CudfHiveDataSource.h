@@ -34,6 +34,7 @@
 #include <cudf/ast/expressions.hpp>
 
 #include <mutex>
+#include <optional>
 #include <string_view>
 #include <unordered_set>
 
@@ -149,6 +150,16 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   // Whether any subfield filter targets a decimal column. If so, addSplit()
   // rebuilds the pushdown AST against each split's Parquet decimal types.
   bool hasDecimalSubfieldFilter_{false};
+
+  // Table-column names and types of the scan's own column handles, used to
+  // resolve read column types that are not data columns (e.g. partition
+  // columns of Delta tables).
+  RowTypePtr scanColumnsType_;
+
+  // First scan column that is not stored in the data file (partition key,
+  // synthesized, row index or row id), if any. The plain Hive cuDF reader
+  // cannot produce such columns; see createCudfSplitReader().
+  std::optional<std::string> firstNonFileColumn_;
 
  private:
   // A partition key the data source resolves from the split.
