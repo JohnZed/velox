@@ -28,10 +28,13 @@
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/TableHandle.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/type/tz/TimeZoneMap.h"
 #ifdef VELOX_ENABLE_ABFS
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
 #endif
 
+#include <cudf/binaryop.hpp>
 #include <cudf/column/column.hpp>
 #include <cudf/io/datasource.hpp>
 #include <cudf/io/experimental/hybrid_scan_multifile.hpp>
@@ -40,13 +43,16 @@
 #include <cudf/io/text/byte_range_info.hpp>
 #include <cudf/io/types.hpp>
 #include <cudf/lists/lists_column_view.hpp>
+#include <cudf/scalar/scalar.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/table/table_view.hpp>
 #include <cudf/unary.hpp>
+#include <cudf/utilities/traits.hpp>
 
 #include <cuda_runtime.h>
 #include <nvtx3/nvtx3.hpp>
 
+#include <algorithm>
 #include <memory>
 #include <numeric>
 #include <ranges>
@@ -165,6 +171,89 @@ std::unique_ptr<cudf::table> castDecimalColumnsToVeloxTypes(
   return std::make_unique<cudf::table>(std::move(columns));
 }
 
+std::unique_ptr<cudf::table> packTimestampWithTimeZoneColumns(
+    std::unique_ptr<cudf::table>&& table,
+    std::span<const TypePtr> columnTypes,
+    size_t numPrependedColumns,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
+  VELOX_CHECK_EQ(
+      numPrependedColumns + columnTypes.size(),
+      table->view().num_columns(),
+      "Read column types must match the cuDF table width");
+  if (std::none_of(columnTypes.begin(), columnTypes.end(), [](const auto& t) {
+        return isTimestampWithTimeZoneType(t);
+      })) {
+    return std::move(table);
+  }
+
+  // Parquet stores instants in UTC, so every value carries the UTC key, as in
+  // the CPU reader's TimestampColumnReader.
+  static const int64_t kUtcZoneBits = tz::getTimeZoneID("UTC") & kTimezoneMask;
+  const cudf::data_type int64Type{cudf::type_id::INT64};
+  const cudf::data_type millisType{cudf::type_id::TIMESTAMP_MILLISECONDS};
+
+  auto columns = table->release();
+  for (size_t i = 0; i < columnTypes.size(); ++i) {
+    if (!isTimestampWithTimeZoneType(columnTypes[i])) {
+      continue;
+    }
+    auto& column = columns[numPrependedColumns + i];
+    VELOX_CHECK(
+        cudf::is_timestamp(column->type()),
+        "Expected a timestamp column to pack as TIMESTAMP WITH TIME ZONE, got cuDF type id {}",
+        static_cast<int32_t>(column->type().id()));
+    if (column->type() != millisType) {
+      column = cudf::cast(column->view(), millisType, stream, mr);
+    }
+    // Reinterpret the millisecond timestamps as their INT64 representation,
+    // then shift and stamp the zone key. Nulls propagate unchanged.
+    auto millis = cudf::bit_cast(column->view(), int64Type);
+    auto shift = cudf::numeric_scalar<int32_t>(kMillisShift, true, stream, mr);
+    column = cudf::binary_operation(
+        millis,
+        shift,
+        cudf::binary_operator::SHIFT_LEFT,
+        int64Type,
+        stream,
+        mr);
+    if (kUtcZoneBits != 0) {
+      auto zone = cudf::numeric_scalar<int64_t>(kUtcZoneBits, true, stream, mr);
+      column = cudf::binary_operation(
+          column->view(),
+          zone,
+          cudf::binary_operator::BITWISE_OR,
+          int64Type,
+          stream,
+          mr);
+    }
+  }
+  return std::make_unique<cudf::table>(std::move(columns));
+}
+
+TypePtr resolveScanColumnType(
+    const HiveTableHandle& tableHandle,
+    const std::string& name,
+    const RowTypePtr& outputType) {
+  if (const auto& dataColumns = tableHandle.dataColumns();
+      dataColumns != nullptr && dataColumns->containsChild(name)) {
+    return dataColumns->findChild(name);
+  }
+  for (const auto& handle : tableHandle.hiveFilterColumnHandles()) {
+    if (handle->name() == name) {
+      return handle->dataType();
+    }
+  }
+  if (outputType != nullptr && outputType->containsChild(name)) {
+    return outputType->findChild(name);
+  }
+  VELOX_USER_FAIL(
+      "Column '{}' of table {} is neither a data column nor described by a column handle. "
+      "Partition and synthesized columns used only in filters are not supported by this cuDF reader.",
+      name,
+      tableHandle.tableName());
+}
+
 CudfSplitReader::CudfSplitReader(
     std::shared_ptr<CudfHiveConnectorSplit> split,
     std::shared_ptr<const HiveTableHandle> tableHandle,
@@ -201,12 +290,13 @@ CudfSplitReader::CudfSplitReader(
       readColumnTypes_.size(),
       "Read columns must include all output columns");
   if (readColumnNames_.size() > readColumnTypes_.size()) {
-    const auto& dataColumns = tableHandle_->dataColumns();
-    VELOX_CHECK_NOT_NULL(
-        dataColumns,
-        "Table schema is required to resolve filter-only column types");
+    // Filter-only columns are not in outputType. Resolve them through the
+    // shared helper rather than dataColumns alone, because a partition column
+    // that only appears in a filter (e.g. Delta's `WHERE part IS NULL`) is not
+    // a data column; its type comes from the filter column handles.
     for (size_t i = readColumnTypes_.size(); i < readColumnNames_.size(); ++i) {
-      readColumnTypes_.push_back(dataColumns->findChild(readColumnNames_[i]));
+      readColumnTypes_.push_back(
+          resolveScanColumnType(*tableHandle_, readColumnNames_[i]));
     }
   }
   VELOX_DCHECK_EQ(readColumnNames_.size(), readColumnTypes_.size());
@@ -336,8 +426,18 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk() {
     }
   }
 
-  return castDecimalColumnsToVeloxTypes(
+  auto table = castDecimalColumnsToVeloxTypes(
       std::move(tableWithMetadata.tbl),
+      readColumnTypes_,
+      prependRowIndex_ ? 1 : 0,
+      stream_,
+      outputMr);
+  // Done here, in the shared reader, so that the Hive, Delta and Iceberg cuDF
+  // readers all hand Velox the packed BIGINT form it uses for TIMESTAMP WITH
+  // TIME ZONE. Without it, the cuDF-to-Velox conversion fails because a cuDF
+  // timestamp cannot be relabelled as a zoned timestamp.
+  return packTimestampWithTimeZoneColumns(
+      std::move(table),
       readColumnTypes_,
       prependRowIndex_ ? 1 : 0,
       stream_,
@@ -562,6 +662,53 @@ rmm::device_async_resource_ref CudfSplitReader::determineCudfMemoryResource()
   return get_output_mr();
 }
 
+void CudfSplitReader::checkTimestampWithTimeZoneColumns() const {
+  const auto containsTimestampWithTimeZone = [](const TypePtr& type,
+                                                const auto& self) -> bool {
+    if (isTimestampWithTimeZoneType(type)) {
+      return true;
+    }
+    for (size_t i = 0; i < type->size(); ++i) {
+      if (self(type->childAt(i), self)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  for (size_t i = 0; i < readColumnTypes_.size(); ++i) {
+    const auto& type = readColumnTypes_[i];
+    if (!isTimestampWithTimeZoneType(type)) {
+      if (containsTimestampWithTimeZone(type, containsTimestampWithTimeZone)) {
+        VELOX_NYI(
+            "Nested TIMESTAMP WITH TIME ZONE fields are not supported by the cuDF Parquet reader: {}",
+            readColumnNames_[i]);
+      }
+      continue;
+    }
+    // A column that is not UTC normalized holds local wall clock readings in
+    // a zone the file does not record, so there is no instant to pack. INT96
+    // and converted-type timestamps carry no flag and are UTC by definition.
+    for (const auto& metadata : fileMetaData_) {
+      if (metadata.schema.empty()) {
+        continue;
+      }
+      for (const auto childIndex : metadata.schema.front().children_idx) {
+        const auto& element = metadata.schema[childIndex];
+        if (element.name != readColumnNames_[i] ||
+            !element.logical_type.has_value() ||
+            !element.logical_type->timestamp_type.has_value()) {
+          continue;
+        }
+        VELOX_USER_CHECK(
+            element.logical_type->timestamp_type->isAdjustedToUTC,
+            "Cannot read a Parquet timestamp that is not UTC-normalized as TIMESTAMP WITH TIME ZONE: {}",
+            element.name);
+      }
+    }
+  }
+}
+
 void CudfSplitReader::fileMetaDatas() {
   if (not fileMetaData_.empty()) {
     return;
@@ -600,6 +747,10 @@ void CudfSplitReader::fileMetaDatas() {
 void CudfSplitReader::createCudfReader() {
   // Read file metadatas
   fileMetaDatas();
+
+  // Reject zoned timestamp columns the reader cannot pack correctly before
+  // any column data is read.
+  checkTimestampWithTimeZoneColumns();
 
   // Setup reader options
   setupReaderOptions();

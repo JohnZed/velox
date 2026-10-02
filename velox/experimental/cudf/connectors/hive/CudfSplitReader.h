@@ -57,6 +57,37 @@ std::unique_ptr<cudf::table> castDecimalColumnsToVeloxTypes(
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
+/// Packs top-level TIMESTAMP WITH TIME ZONE columns into Velox's BIGINT
+/// representation (UTC millis << 12 | zone key), stamped with the UTC zone key.
+/// cuDF has no zoned timestamp type, so the Parquet reader returns these
+/// columns as plain timestamps; Velox operators and the cuDF-to-Velox
+/// conversion expect the packed form. columnTypes must describe every column
+/// after numPrependedColumns, which are left unchanged.
+std::unique_ptr<cudf::table> packTimestampWithTimeZoneColumns(
+    std::unique_ptr<cudf::table>&& table,
+    std::span<const TypePtr> columnTypes,
+    size_t numPrependedColumns,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr);
+
+/// Resolves the type of a column that the scan reads, in order of preference:
+/// the table's data columns, the table handle's filter column handles, then
+/// 'outputType' when provided. Throws a user error naming the column when none
+/// of them describe it.
+///
+/// Shared by the Hive, Delta and Iceberg cuDF readers. Data columns come first
+/// so that columns stored in the file keep their existing types. The filter
+/// column handles are needed because connectors such as Delta exclude
+/// partition columns from dataColumns but still allow filters on them; the
+/// handles are the only place a filter-only partition column's type is
+/// recorded. Presto's Hive connector sends no filter column handles, so for
+/// plain Hive a filter-only partition column still fails here, now with an
+/// explicit message (see findUnsupportedCudfHiveScanColumn()).
+TypePtr resolveScanColumnType(
+    const ::facebook::velox::connector::hive::HiveTableHandle& tableHandle,
+    const std::string& name,
+    const RowTypePtr& outputType = nullptr);
+
 class CudfSplitReader : public NvtxHelper {
  public:
   CudfSplitReader(
@@ -140,6 +171,11 @@ class CudfSplitReader : public NvtxHelper {
 
   // Read file metadatas.
   void fileMetaDatas();
+
+  // Validates that read TIMESTAMP WITH TIME ZONE columns can be packed: the
+  // column must be top-level and stored UTC-normalized in the Parquet file.
+  // Mirrors the CPU Parquet reader's TimestampColumnReader checks.
+  void checkTimestampWithTimeZoneColumns() const;
 
   // Return the logical subfield filter AST used after reading.
   const cudf::ast::expression* subfieldFilterAst() const;
