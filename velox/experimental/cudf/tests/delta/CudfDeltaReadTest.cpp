@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/cudf/connectors/hive/delta/CudfDeltaConnector.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -22,11 +23,17 @@
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/delta/HiveDeltaSplit.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/tz/TimeZoneMap.h"
+
+#include <cudf/io/parquet.hpp>
+#include <cudf/unary.hpp>
+
+#include <filesystem>
 
 namespace facebook::velox::cudf_velox::exec::test {
 
@@ -100,6 +107,44 @@ class CudfDeltaReadTest : public CudfHiveConnectorTestBase {
           HiveColumnHandle::ColumnType::kRegular) {
     return std::make_shared<HiveColumnHandle>(
         name, columnType, type, type, std::vector<common::Subfield>{});
+  }
+  core::PlanNodePtr timestampScan() {
+    auto type = ROW({"ts"}, {TIMESTAMP_WITH_TIME_ZONE()});
+    return PlanBuilder()
+        .startTableScan()
+        .connectorId(kCudfDeltaConnectorId)
+        .outputType(type)
+        .dataColumns(type)
+        .assignments({{"ts", makeHandle("ts", TIMESTAMP_WITH_TIME_ZONE())}})
+        .endTableScan()
+        .planNode();
+  }
+
+  std::shared_ptr<TempFilePath> writeTimestamps(
+      const std::vector<std::optional<int64_t>>& values,
+      cudf::type_id unit,
+      bool utc = true) {
+    // Bit-cast integers on GPU: routing wide millisecond timestamps through
+    // Arrow's nanosecond type would overflow before reaching the reader.
+    auto input =
+        makeRowVector({"ts"}, {makeNullableFlatVector<int64_t>(values)});
+    auto stream = cudf::get_default_stream();
+    auto mr = cudf::get_current_device_resource_ref();
+    auto columns =
+        with_arrow::toCudfTable(input, pool_.get(), stream, mr)->release();
+    columns[0] = std::make_unique<cudf::column>(
+        cudf::bit_cast(columns[0]->view(), cudf::data_type{unit}), stream, mr);
+    cudf::table table(std::move(columns));
+    auto path = TempFilePath::create();
+    cudf::io::table_input_metadata metadata(table.view());
+    metadata.column_metadata[0].set_name("ts");
+    cudf::io::write_parquet(
+        cudf::io::parquet_writer_options::builder(
+            cudf::io::sink_info(path->getPath()), table.view())
+            .metadata(metadata)
+            .utc_timestamps(utc)
+            .build());
+    return path;
   }
 };
 
@@ -498,6 +543,86 @@ TEST_F(CudfDeltaReadTest, timestampWithTimeZoneColumn) {
   AssertQueryBuilder(plan)
       .splits(makeDeltaSplits(dataFile->getPath()))
       .assertResults({expected});
+}
+
+// TODO(delta): Keep native Parquet units until packing, then floor negative
+// fractions to milliseconds.
+TEST_F(CudfDeltaReadTest, DISABLED_timestampPrecisionAndNegativeFractions) {
+  // INT64 millis/micros/nanos and independent INT96 nanoseconds must floor
+  // pre-epoch fractions consistently and preserve the packed UTC zone key.
+  for (int encoding = 0; encoding < 4; ++encoding) {
+    SCOPED_TRACE(encoding);
+    auto unit = encoding == 0 ? cudf::type_id::TIMESTAMP_MILLISECONDS
+        : encoding == 1       ? cudf::type_id::TIMESTAMP_MICROSECONDS
+                              : cudf::type_id::TIMESTAMP_NANOSECONDS;
+    auto path = writeTimestamps({-1001, -1, 0, 1, 1001, std::nullopt}, unit);
+    // cuDF's INT96 writer truncates nanos to micros; the fixture contains
+    // real sub-microsecond data and does not use that writer.
+    auto file = encoding == 3
+        ? (std::filesystem::path(__FILE__).parent_path().parent_path() /
+           "data/timestamps/int96_nanoseconds.parquet")
+              .string()
+        : path->getPath();
+    auto plan = timestampScan();
+    std::shared_ptr<velox::exec::Task> task;
+    auto result = AssertQueryBuilder(plan)
+                      .splits(makeDeltaSplits(file))
+                      .copyResults(pool_.get(), task);
+    auto expected = encoding == 0 ? std::vector<int64_t>{-1001, -1, 0, 1, 1001}
+        : encoding == 1           ? std::vector<int64_t>{-2, -1, 0, 0, 1}
+                                  : std::vector<int64_t>{-1, -1, 0, 0, 0};
+    auto values = result->childAt(0)->as<SimpleVector<int64_t>>();
+    ASSERT_EQ(result->size(), 6);
+    for (size_t i = 0; i < expected.size(); ++i) {
+      EXPECT_EQ(values->valueAt(i),
+                pack(expected[i], tz::getTimeZoneID("UTC")));
+    }
+    EXPECT_TRUE(values->isNullAt(5));
+    // Prove a GPU scan ran; fallback-disabled mode can retain CPU scans.
+    auto stats = velox::exec::toPlanStats(task->taskStats());
+    EXPECT_GT(stats.at(plan->id()).operatorStats.at("CudfToVelox")->inputRows,
+              0);
+  }
+}
+
+// TODO(delta): Reject out-of-range milliseconds before shifting into the packed
+// representation.
+TEST_F(CudfDeltaReadTest, DISABLED_timestampPackingLimits) {
+  auto plan = timestampScan();
+  for (const auto& values : std::vector<std::vector<std::optional<int64_t>>>{
+           {kMinMillisUtc, kMaxMillisUtc, std::nullopt},
+           {std::nullopt, std::nullopt}}) {
+    auto path = writeTimestamps(values, cudf::type_id::TIMESTAMP_MILLISECONDS);
+    auto expected = values;
+    for (auto& value : expected) {
+      if (value) {
+        value = pack(*value, tz::getTimeZoneID("UTC"));
+      }
+    }
+    AssertQueryBuilder(plan)
+        .splits(makeDeltaSplits(path->getPath()))
+        .assertResults(
+            makeRowVector({"ts"},
+                          {makeNullableFlatVector<int64_t>(
+                              expected, TIMESTAMP_WITH_TIME_ZONE())}));
+  }
+  for (auto invalid : {kMinMillisUtc - 1, kMaxMillisUtc + 1}) {
+    auto path = writeTimestamps({0, invalid, std::nullopt},
+                                cudf::type_id::TIMESTAMP_MILLISECONDS);
+    VELOX_ASSERT_THROW(AssertQueryBuilder(plan)
+                           .splits(makeDeltaSplits(path->getPath()))
+                           .copyResults(pool_.get()),
+                       "TimestampWithTimeZone overflow");
+  }
+}
+
+TEST_F(CudfDeltaReadTest, rejectsLocalParquetTimestamp) {
+  auto path =
+      writeTimestamps({0}, cudf::type_id::TIMESTAMP_MICROSECONDS, false);
+  VELOX_ASSERT_THROW(AssertQueryBuilder(timestampScan())
+                         .splits(makeDeltaSplits(path->getPath()))
+                         .copyResults(pool_.get()),
+                     "not UTC-normalized");
 }
 
 // With adjust_timestamp_to_session_timezone, timestamp partition values are
