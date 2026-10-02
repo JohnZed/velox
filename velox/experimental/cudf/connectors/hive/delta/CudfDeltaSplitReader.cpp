@@ -23,6 +23,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/connectors/hive/ConstantFromString.h"
 #include "velox/connectors/hive/FileSplitReader.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 #include <cudf/column/column_factories.hpp>
 #include <cudf/null_mask.hpp>
@@ -223,17 +224,10 @@ void CudfDeltaSplitReader::adaptColumns() {
   fileReadTypes.reserve(readColumnNames_.size());
   for (size_t index{0}; index < readColumnNames_.size(); ++index) {
     const auto& fieldName = readColumnNames_[index];
-    const TypePtr veloxType = [&]() -> TypePtr {
-      if (index < outputType_->size()) {
-        VELOX_DCHECK_EQ(fieldName, outputType_->nameOf(index));
-        return outputType_->childAt(index);
-      }
-      const auto& dataColumns = tableHandle_->dataColumns();
-      VELOX_CHECK(dataColumns and dataColumns->containsChild(fieldName),
-                  "Filter-only column is missing from the table schema: {}",
-                  fieldName);
-      return dataColumns->findChild(fieldName);
-    }();
+    // The base reader resolved every read column's type, including filter-only
+    // partition columns, which are absent from dataColumns and are typed by
+    // the table handle's filter column handles (resolveScanColumnType()).
+    const TypePtr& veloxType = readColumnTypes_[index];
 
     if (auto info = deltaSplit_->infoColumns.find(fieldName);
         info != deltaSplit_->infoColumns.end()) {
@@ -264,12 +258,21 @@ std::unique_ptr<cudf::scalar> CudfDeltaSplitReader::makeInjectedScalar(
     const bool readAsLocalTime =
         hiveConfig_->readTimestampPartitionValueAsLocalTime(
             connectorQueryCtx_->sessionProperties());
+    // Match the CPU DeltaSplitReader: when the session adjusts timestamps to
+    // its time zone, timestamp partition values are interpreted in that zone.
+    const auto& sessionTimezone = connectorQueryCtx_->sessionTimezone();
+    const tz::TimeZone* timezone =
+        connectorQueryCtx_->adjustTimestampToTimezone() &&
+            !sessionTimezone.empty()
+        ? tz::locateZone(sessionTimezone)
+        : nullptr;
     const VectorPtr constant = velox::connector::hive::newConstantFromString(
         column.veloxType,
         column.value,
         connectorQueryCtx_->memoryPool(),
         readAsLocalTime,
-        /*isDaysSinceEpoch=*/false);
+        /*isDaysSinceEpoch=*/false,
+        timezone);
     return cudf_velox::makeScalarFromConstantExpr(
         std::make_shared<core::ConstantTypedExpr>(constant),
         connectorQueryCtx_->memoryPool(),

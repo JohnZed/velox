@@ -43,6 +43,7 @@
 #include "velox/expression/ExprOptimizer.h"
 #include "velox/functions/lib/string/StringImpl.h"
 #include "velox/type/Filter.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 #include <cudf/column/column_factories.hpp>
 #include <cudf/scalar/scalar.hpp>
@@ -321,6 +322,8 @@ CudfHiveDataSource::CudfHiveDataSource(
     }
   };
 
+  std::vector<std::string> scanColumnNames;
+  std::vector<TypePtr> scanColumnTypes;
   // Set up column projection if needed. A partition key is not in the data
   // file, so it is materialized per split instead of being read.
   for (uint32_t i = 0; i < outputType_->size(); ++i) {
@@ -332,6 +335,8 @@ CudfHiveDataSource::CudfHiveDataSource(
         outputName);
 
     auto* handle = static_cast<const hive::HiveColumnHandle*>(it->second.get());
+    scanColumnNames.emplace_back(handle->name());
+    scanColumnTypes.emplace_back(handle->dataType());
     const auto& name = handle->name();
     outputSourceNames_.push_back(name);
     if (const auto* partitionKey = partitionKeyHandle(name)) {
@@ -343,6 +348,11 @@ CudfHiveDataSource::CudfHiveDataSource(
     readColumnSet_.emplace(name);
     readColumnNames_.emplace_back(name);
   }
+  // Types of the scan's own columns, keyed by table column name. Used as the
+  // last resort when resolving read column types, so that a projected
+  // partition column (not a data column) still resolves for Delta.
+  scanColumnsType_ =
+      ROW(std::move(scanColumnNames), std::move(scanColumnTypes));
 
   // Copy subfield filters.
   for (const auto& [k, v] : tableHandle_->subfieldFilters()) {
@@ -375,6 +385,35 @@ CudfHiveDataSource::CudfHiveDataSource(
         subfield.baseName(), partitionKey->dataType(), *partitionKey);
     partitionKeyFilters_.emplace(subfield.clone(), std::move(it->second));
     it = subfieldFilters_.erase(it);
+  }
+
+  // The cuDF reader evaluates pushed-down filters against the raw Parquet
+  // timestamps, before TIMESTAMP WITH TIME ZONE columns are packed, so only
+  // filters that never inspect a value are safe. Mirrors the CPU Parquet
+  // reader, which rejects the same filters (TimestampColumnReader).
+  for (const auto& [field, filter] : subfieldFilters_) {
+    // Only top-level columns can be zoned timestamps here; nested ones are
+    // rejected by the split reader before any data is read.
+    if (field.path().size() != 1) {
+      continue;
+    }
+    const auto& name = field.baseName();
+    if (!isTimestampWithTimeZoneType(
+            resolveScanColumnType(*tableHandle_, name, scanColumnsType_))) {
+      continue;
+    }
+    switch (filter->kind()) {
+      case common::FilterKind::kAlwaysTrue:
+      case common::FilterKind::kAlwaysFalse:
+      case common::FilterKind::kIsNull:
+      case common::FilterKind::kIsNotNull:
+        break;
+      default:
+        VELOX_NYI(
+            "Filter pushdown on TIMESTAMP WITH TIME ZONE is not supported by the cuDF Parquet reader: {} {}",
+            name,
+            filter->toString());
+    }
   }
 
   // Add fields in the filter to the columns to read if not there
@@ -489,6 +528,18 @@ CudfHiveDataSource::CudfHiveDataSource(
 }
 
 std::unique_ptr<CudfSplitReader> CudfHiveDataSource::createCudfSplitReader() {
+  // The Delta and Iceberg data sources override this method with readers that
+  // synthesize partition and info columns. The plain Hive reader only reads
+  // columns stored in the Parquet file, so a partition or synthesized column
+  // would otherwise be requested from the file and silently missing. The plan
+  // adapter already routes such scans to the CPU
+  // (findUnsupportedCudfHiveScanColumn()); this is a backstop with a clear
+  // message for scans that reach the GPU reader anyway.
+  if (firstNonFileColumn_.has_value()) {
+    VELOX_NYI(
+        "The cuDF Hive reader cannot produce partition or synthesized column '{}'",
+        firstNonFileColumn_.value());
+  }
   return std::make_unique<CudfSplitReader>(
       split_,
       tableHandle_,
