@@ -33,14 +33,15 @@ class TimestampWithTimeZoneTest : public CudfHiveConnectorTestBase {
  protected:
   // Checking the operator type is essential: fallback-disabled mode alone
   // permits retained CPU TableScan operators and cannot prove GPU execution.
-  void assertGpuOperator(const std::shared_ptr<velox::exec::Task>& task,
-                         const core::PlanNodeId& id,
-                         const std::string& op) {
+  void assertGpuOperator(
+      const std::shared_ptr<velox::exec::Task>& task,
+      const core::PlanNodeId& id,
+      const std::string& op) {
     auto stats = velox::exec::toPlanStats(task->taskStats());
     ASSERT_NE(stats.find(id), stats.end());
     SCOPED_TRACE(op);
-    ASSERT_NE(stats.at(id).operatorStats.find(op),
-              stats.at(id).operatorStats.end());
+    ASSERT_NE(
+        stats.at(id).operatorStats.find(op), stats.at(id).operatorStats.end());
     EXPECT_GT(stats.at(id).operatorStats.at(op)->inputRows, 0);
   }
   void assertZonedRepresentatives(const RowVectorPtr& result) {
@@ -57,11 +58,11 @@ class TimestampWithTimeZoneTest : public CudfHiveConnectorTestBase {
         EXPECT_EQ(value, pack(1, tz::getTimeZoneID("Europe/Paris")));
       } else {
         EXPECT_EQ(millis, 0);
-        EXPECT_TRUE(value == pack(0, tz::getTimeZoneID("UTC")) ||
-                    value ==
-                        pack(0, tz::getTimeZoneID("America/Los_Angeles")) ||
-                    value == pack(0, tz::getTimeZoneID("Europe/Paris")) ||
-                    value == pack(0, tz::getTimeZoneID("Asia/Tokyo")));
+        EXPECT_TRUE(
+            value == pack(0, tz::getTimeZoneID("UTC")) ||
+            value == pack(0, tz::getTimeZoneID("America/Los_Angeles")) ||
+            value == pack(0, tz::getTimeZoneID("Europe/Paris")) ||
+            value == pack(0, tz::getTimeZoneID("Asia/Tokyo")));
       }
     }
   }
@@ -71,12 +72,13 @@ class TimestampWithTimeZoneTest : public CudfHiveConnectorTestBase {
     auto paris = tz::getTimeZoneID("Europe/Paris");
     return makeRowVector(
         {"ts", "id"},
-        {makeNullableFlatVector<int64_t>({pack(0, la),
-                                          pack(0, utc),
-                                          pack(1, paris),
-                                          pack(-1, la),
-                                          std::nullopt},
-                                         TIMESTAMP_WITH_TIME_ZONE()),
+        {makeNullableFlatVector<int64_t>(
+             {pack(0, la),
+              pack(0, utc),
+              pack(1, paris),
+              pack(-1, la),
+              std::nullopt},
+             TIMESTAMP_WITH_TIME_ZONE()),
          makeFlatVector<int64_t>({1, 2, 3, 4, 5})});
   }
 };
@@ -93,10 +95,10 @@ TEST_F(TimestampWithTimeZoneTest, DISABLED_comparisonsAcrossTimezones) {
   };
   auto input = makeRowVector(
       {"a", "b", "raw_a", "raw_b"},
-      {makeNullableFlatVector<int64_t>({pack(0, 1), pack(1, 1), std::nullopt},
-                                       TIMESTAMP_WITH_TIME_ZONE()),
-       makeFlatVector<int64_t>({pack(0, 0), pack(1, 0), pack(0, 0)},
-                               TIMESTAMP_WITH_TIME_ZONE()),
+      {makeNullableFlatVector<int64_t>(
+           {pack(0, 1), pack(1, 1), std::nullopt}, TIMESTAMP_WITH_TIME_ZONE()),
+       makeFlatVector<int64_t>(
+           {pack(0, 0), pack(1, 0), pack(0, 0)}, TIMESTAMP_WITH_TIME_ZONE()),
        makeNullableFlatVector<int64_t>({pack(0, 1), pack(1, 1), std::nullopt}),
        makeFlatVector<int64_t>({pack(0, 0), pack(1, 0), pack(0, 0)})});
   for (int mode = 0; mode < 3; ++mode) {
@@ -146,14 +148,14 @@ TEST_F(TimestampWithTimeZoneTest, DISABLED_partitionedGroupingAcrossTimezones) {
     // Partial groups choose different zone representatives. Hash the instant
     // at the exchange so they reach the same final group, including nulls.
     for (auto zone : {"America/Los_Angeles", "Europe/Paris", "Asia/Tokyo"}) {
-      auto input =
-          makeRowVector({"ts"},
-                        {makeNullableFlatVector<int64_t>(
-                            {pack(-1, tz::getTimeZoneID("America/Los_Angeles")),
-                             pack(0, tz::getTimeZoneID(zone)),
-                             pack(1, tz::getTimeZoneID("Europe/Paris")),
-                             std::nullopt},
-                            TIMESTAMP_WITH_TIME_ZONE())});
+      auto input = makeRowVector(
+          {"ts"},
+          {makeNullableFlatVector<int64_t>(
+              {pack(-1, tz::getTimeZoneID("America/Los_Angeles")),
+               pack(0, tz::getTimeZoneID(zone)),
+               pack(1, tz::getTimeZoneID("Europe/Paris")),
+               std::nullopt},
+              TIMESTAMP_WITH_TIME_ZONE())});
       sources.push_back(PlanBuilder(ids)
                             .values({input, input})
                             .partialAggregation({"ts"}, {"count(1)"})
@@ -165,12 +167,12 @@ TEST_F(TimestampWithTimeZoneTest, DISABLED_partitionedGroupingAcrossTimezones) {
                     .capturePlanNodeId(partitionId)
                     .finalAggregation()
                     .planNode();
-    auto expected =
-        makeRowVector({"ts", "a0"},
-                      {makeNullableFlatVector<int64_t>(
-                           {pack(-1, 0), pack(0, 0), pack(1, 0), std::nullopt},
-                           TIMESTAMP_WITH_TIME_ZONE()),
-                       makeFlatVector<int64_t>({6, 6, 6, 6})});
+    auto expected = makeRowVector(
+        {"ts", "a0"},
+        {makeNullableFlatVector<int64_t>(
+             {pack(-1, 0), pack(0, 0), pack(1, 0), std::nullopt},
+             TIMESTAMP_WITH_TIME_ZONE()),
+         makeFlatVector<int64_t>({6, 6, 6, 6})});
     std::shared_ptr<velox::exec::Task> task;
     auto result =
         AssertQueryBuilder(plan)
@@ -181,15 +183,17 @@ TEST_F(TimestampWithTimeZoneTest, DISABLED_partitionedGroupingAcrossTimezones) {
         facebook::velox::exec::test::assertEqualResults({expected}, {result}));
     assertZonedRepresentatives(result);
     assertGpuOperator(task, partitionId, "CudfLocalPartition");
-    assertGpuOperator(task,
-                      plan->id(),
-                      std::string("CudfGroupby") +
-                          std::string(core::AggregationNode::toName(
-                              core::AggregationNode::Step::kFinal)));
+    assertGpuOperator(
+        task,
+        plan->id(),
+        std::string("CudfGroupby") +
+            std::string(
+                core::AggregationNode::toName(
+                    core::AggregationNode::Step::kFinal)));
     if (streaming) {
       auto stats = velox::exec::toPlanStats(task->taskStats());
-      EXPECT_GT(stats.at(plan->id()).customStats.at("streamingGroupbyUsed").sum,
-                0);
+      EXPECT_GT(
+          stats.at(plan->id()).customStats.at("streamingGroupbyUsed").sum, 0);
     }
   }
 }
@@ -200,21 +204,23 @@ TEST_F(TimestampWithTimeZoneTest, DISABLED_distinctAcrossTimezones) {
                   .values({zonedValues()})
                   .singleAggregation({"ts"}, {})
                   .planNode();
-  auto expected =
-      makeRowVector({"ts"},
-                    {makeNullableFlatVector<int64_t>(
-                        {pack(-1, 0), pack(0, 0), pack(1, 0), std::nullopt},
-                        TIMESTAMP_WITH_TIME_ZONE())});
+  auto expected = makeRowVector(
+      {"ts"},
+      {makeNullableFlatVector<int64_t>(
+          {pack(-1, 0), pack(0, 0), pack(1, 0), std::nullopt},
+          TIMESTAMP_WITH_TIME_ZONE())});
   std::shared_ptr<velox::exec::Task> task;
   auto result = AssertQueryBuilder(plan).copyResults(pool_.get(), task);
   ASSERT_TRUE(
       facebook::velox::exec::test::assertEqualResults({expected}, {result}));
   assertZonedRepresentatives(result);
-  assertGpuOperator(task,
-                    plan->id(),
-                    std::string("CudfDistinct") +
-                        std::string(core::AggregationNode::toName(
-                            core::AggregationNode::Step::kSingle)));
+  assertGpuOperator(
+      task,
+      plan->id(),
+      std::string("CudfDistinct") +
+          std::string(
+              core::AggregationNode::toName(
+                  core::AggregationNode::Step::kSingle)));
 }
 
 // TODO(delta): Remember UTC-instant keys across batches instead of packed zoned
@@ -229,8 +235,8 @@ TEST_F(TimestampWithTimeZoneTest, DISABLED_markDistinctAcrossBatches) {
       PlanBuilder().values({a, b}).markDistinct("distinct", {"ts"}).planNode();
   auto task = AssertQueryBuilder(plan).assertResults(makeRowVector(
       {"ts", "distinct"},
-      {makeFlatVector<int64_t>({pack(0, 0), pack(1, 0), pack(0, 1), pack(1, 1)},
-                               type),
+      {makeFlatVector<int64_t>(
+           {pack(0, 0), pack(1, 0), pack(0, 1), pack(1, 1)}, type),
        makeFlatVector<bool>({true, true, false, false})}));
   assertGpuOperator(task, plan->id(), "CudfMarkDistinct");
 }
@@ -239,21 +245,22 @@ TEST_F(TimestampWithTimeZoneTest, DISABLED_markDistinctAcrossBatches) {
 // output.
 TEST_F(TimestampWithTimeZoneTest, DISABLED_hashJoinAcrossTimezones) {
   auto type = TIMESTAMP_WITH_TIME_ZONE();
-  auto left =
-      makeRowVector({"a", "l"},
-                    {makeNullableFlatVector<int64_t>(
-                         {pack(0, tz::getTimeZoneID("America/Los_Angeles")),
-                          pack(1, 0),
-                          std::nullopt},
-                         type),
-                     makeFlatVector<int64_t>({1, 2, 3})});
-  auto right = makeRowVector({"b", "r"},
-                             {makeNullableFlatVector<int64_t>(
-                                  {pack(0, tz::getTimeZoneID("Europe/Paris")),
-                                   pack(1, 0),
-                                   std::nullopt},
-                                  type),
-                              makeFlatVector<int64_t>({4, 5, 6})});
+  auto left = makeRowVector(
+      {"a", "l"},
+      {makeNullableFlatVector<int64_t>(
+           {pack(0, tz::getTimeZoneID("America/Los_Angeles")),
+            pack(1, 0),
+            std::nullopt},
+           type),
+       makeFlatVector<int64_t>({1, 2, 3})});
+  auto right = makeRowVector(
+      {"b", "r"},
+      {makeNullableFlatVector<int64_t>(
+           {pack(0, tz::getTimeZoneID("Europe/Paris")),
+            pack(1, 0),
+            std::nullopt},
+           type),
+       makeFlatVector<int64_t>({4, 5, 6})});
   for (const auto& filter : {"", "(a = b) AND (l < r)"}) {
     auto ids = std::make_shared<core::PlanNodeIdGenerator>();
     auto build = PlanBuilder(ids).values({right}).planNode();
@@ -269,10 +276,11 @@ TEST_F(TimestampWithTimeZoneTest, DISABLED_hashJoinAcrossTimezones) {
     for (vector_size_t i = 0; i < result->size(); ++i) {
       EXPECT_EQ(type->compare(a->valueAt(i), b->valueAt(i)), 0);
       if (unpackMillisUtc(a->valueAt(i)) == 0) {
-        EXPECT_EQ(unpackZoneKeyId(a->valueAt(i)),
-                  tz::getTimeZoneID("America/Los_Angeles"));
-        EXPECT_EQ(unpackZoneKeyId(b->valueAt(i)),
-                  tz::getTimeZoneID("Europe/Paris"));
+        EXPECT_EQ(
+            unpackZoneKeyId(a->valueAt(i)),
+            tz::getTimeZoneID("America/Los_Angeles"));
+        EXPECT_EQ(
+            unpackZoneKeyId(b->valueAt(i)), tz::getTimeZoneID("Europe/Paris"));
       }
     }
     assertGpuOperator(task, plan->id(), "CudfHashJoinProbe");
@@ -281,8 +289,9 @@ TEST_F(TimestampWithTimeZoneTest, DISABLED_hashJoinAcrossTimezones) {
 
 // TODO(delta): Equal instants must tie on timestamp so secondary sort keys
 // decide their order.
-TEST_F(TimestampWithTimeZoneTest,
-       DISABLED_sortingPreservesZonesAndUsesSecondaryKeys) {
+TEST_F(
+    TimestampWithTimeZoneTest,
+    DISABLED_sortingPreservesZonesAndUsesSecondaryKeys) {
   auto input = zonedValues();
   for (bool topN : {false, true}) {
     auto builder = PlanBuilder().values({input});
@@ -301,8 +310,9 @@ TEST_F(TimestampWithTimeZoneTest,
       EXPECT_EQ(actual->valueAt(i), ids[i]);
     }
     auto keys = result->childAt(0)->as<SimpleVector<int64_t>>();
-    EXPECT_EQ(unpackZoneKeyId(keys->valueAt(1)),
-              tz::getTimeZoneID("America/Los_Angeles"));
+    EXPECT_EQ(
+        unpackZoneKeyId(keys->valueAt(1)),
+        tz::getTimeZoneID("America/Los_Angeles"));
     assertGpuOperator(task, plan->id(), topN ? "CudfTopN" : "CudfOrderBy");
   }
 }

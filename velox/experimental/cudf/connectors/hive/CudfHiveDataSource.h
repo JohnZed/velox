@@ -34,7 +34,6 @@
 #include <cudf/ast/expressions.hpp>
 
 #include <mutex>
-#include <optional>
 #include <string_view>
 #include <unordered_set>
 
@@ -118,20 +117,15 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   // owned by 'subfieldTree_'.
   const cudf::ast::expression* subfieldFilterAst_{nullptr};
 
-  // Table-column names and types of the scan's own column handles, used to
-  // resolve read column types that are not data columns (e.g. partition
-  // columns of Delta tables).
-  RowTypePtr scanColumnsType_;
-
-  // First scan column that is not stored in the data file (partition key,
-  // synthesized, row index or row id), if any. The plain Hive cuDF reader
-  // cannot produce such columns; see createCudfSplitReader().
-  std::optional<std::string> firstNonFileColumn_;
-
  private:
   // Construct and cache a RowTypePtr for the table column names and types.
   const RowTypePtr getTableRowType();
   RowTypePtr cachedTableRowType_{};
+
+  // Table-column names and types of the scan's own column handles, used to
+  // resolve read column types that are not data columns (e.g. partition
+  // columns of Delta tables).
+  RowTypePtr scanColumnsType_;
 
   memory::MemoryPool* const pool_;
 
