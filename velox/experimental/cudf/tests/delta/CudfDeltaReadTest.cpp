@@ -24,6 +24,7 @@
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/delta/HiveDeltaSplit.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/TableScan.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
@@ -683,6 +684,88 @@ TEST_F(CudfDeltaReadTest, nestedTimestampWithTimeZone) {
   AssertQueryBuilder(plan)
       .splits(makeDeltaSplits(dataFile->getPath()))
       .assertResults({expected});
+}
+
+// Preloaded splits are prepared in the background, including partition values
+// and the deferred filter on a partition column, then adopted by the driver.
+TEST_F(CudfDeltaReadTest, preloadedSplits) {
+  const std::vector<std::string> regions{"US", "EU", "US", "CA"};
+  std::vector<std::shared_ptr<TempFilePath>> files;
+  std::vector<std::shared_ptr<velox_connector::ConnectorSplit>> splits;
+  std::vector<int64_t> expectedIds;
+  std::vector<std::string> expectedRegions;
+  for (size_t i = 0; i < regions.size(); ++i) {
+    const auto base = static_cast<int64_t>(i * 10);
+    files.push_back(TempFilePath::create());
+    writeToFile(
+        files.back()->getPath(),
+        makeRowVector(
+            {"id"}, {makeFlatVector<int64_t>({base + 1, base + 2, base + 3})}));
+    auto split =
+        makeDeltaSplits(files.back()->getPath(), {{"region", regions[i]}});
+    splits.insert(splits.end(), split.begin(), split.end());
+    if (regions[i] != "EU") {
+      for (const auto id : {base + 1, base + 2, base + 3}) {
+        if (id <= 1) {
+          continue;
+        }
+        expectedIds.push_back(id);
+        expectedRegions.push_back(regions[i]);
+      }
+    }
+  }
+
+  const auto connector =
+      velox_connector::ConnectorRegistry::tryGet(kCudfDeltaConnectorId);
+  ASSERT_TRUE(connector->supportsSplitPreload());
+  ASSERT_NE(connector->ioExecutor(), nullptr);
+
+  auto idHandle = makeHandle("id", BIGINT());
+  auto regionHandle = makeHandle(
+      "region", VARCHAR(), HiveColumnHandle::ColumnType::kPartitionKey);
+  common::SubfieldFilters filters;
+  filters[common::Subfield("region")] =
+      velox::exec::in(std::vector<std::string>{"US", "CA"});
+  filters[common::Subfield("id")] = velox::exec::greaterThan(1);
+  core::PlanNodeId scanNodeId;
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(kCudfDeltaConnectorId)
+                  .outputType(ROW({"id", "region"}, {BIGINT(), VARCHAR()}))
+                  .dataColumns(ROW({"id"}, {BIGINT()}))
+                  .assignments({{"id", idHandle}, {"region", regionHandle}})
+                  .filterColumnHandles({idHandle, regionHandle})
+                  .subfieldFiltersMap(filters)
+                  .endTableScan()
+                  .capturePlanNodeId(scanNodeId)
+                  .planNode();
+
+  std::shared_ptr<velox::exec::Task> task;
+  auto result =
+      AssertQueryBuilder(plan)
+          .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "8")
+          .connectorSessionProperty(
+              kCudfDeltaConnectorId,
+              connector::hive::CudfHiveConfig::kPreloadColumnChunksSession,
+              "true")
+          .splits(splits)
+          .copyResults(pool_.get(), task);
+  facebook::velox::exec::test::assertEqualResults(
+      {makeRowVector(
+          {"id", "region"},
+          {makeFlatVector<int64_t>(expectedIds),
+           makeFlatVector<std::string>(expectedRegions)})},
+      {result});
+
+  // Confirms the splits were prepared by the preloader, not on the driver.
+  const auto planStats = velox::exec::toPlanStats(task->taskStats());
+  const auto& customStats = planStats.at(scanNodeId).customStats;
+  ASSERT_EQ(
+      customStats.count(std::string(velox::exec::TableScan::kPreloadedSplits)),
+      1);
+  EXPECT_GE(
+      customStats.at(std::string(velox::exec::TableScan::kPreloadedSplits)).sum,
+      1);
 }
 
 // With adjust_timestamp_to_session_timezone, timestamp partition values are
