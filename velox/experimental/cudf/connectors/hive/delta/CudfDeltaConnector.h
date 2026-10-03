@@ -55,8 +55,12 @@ class CudfDeltaConnector final
     return false;
   }
 
+  /// Splits are prepared in the background like cuDF Hive and Iceberg splits.
+  /// The base CudfHiveDataSource::setFromDataSource() adopts the prepared
+  /// reader, and all Delta split state lives in that reader, so no Delta
+  /// override is needed.
   bool supportsSplitPreload() const override {
-    return false;
+    return true;
   }
 
  private:
