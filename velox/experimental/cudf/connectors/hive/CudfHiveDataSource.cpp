@@ -30,6 +30,7 @@
 #include "velox/common/Casts.h"
 #include "velox/common/io/IoStatisticsRuntimeStats.h"
 #include "velox/common/time/Timer.h"
+#include "velox/connectors/hive/ConstantFromString.h"
 #include "velox/connectors/hive/FileColumnHandle.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/FileSplitReader.h"

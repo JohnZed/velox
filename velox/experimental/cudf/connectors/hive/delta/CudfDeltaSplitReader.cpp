@@ -293,7 +293,10 @@ std::unique_ptr<cudf::column> CudfDeltaSplitReader::makeAllNullColumn(
     rmm::device_async_resource_ref memoryResource) const {
   auto nullMask = [&]() {
     return cudf::create_null_mask(
-        numRows, cudf::mask_state::ALL_NULL, stream_, memoryResource);
+        numRows,
+        cudf::mask_state::ALL_NULL,
+        stream_,
+        cudf::memory_resources{memoryResource, get_temp_mr()});
   };
 
   if (type->isRow()) {
