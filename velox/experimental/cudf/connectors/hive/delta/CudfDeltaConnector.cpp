@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/connectors/hive/delta/CudfDeltaConnector.h"
 #include "velox/experimental/cudf/connectors/hive/delta/CudfDeltaDataSource.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include "velox/connectors/hive/HiveDataSource.h"
 
@@ -76,6 +77,12 @@ std::optional<std::string> CudfDeltaConnector::unsupportedGpuScanReason(
           "cuDF Delta reader does not support MAP column '{}'",
           hiveColumn->name());
     }
+    if (!isTypeSupportedByCudf(hiveColumn->dataType())) {
+      return fmt::format(
+          "cuDF Delta reader does not support type {} for column '{}'",
+          hiveColumn->dataType()->toString(),
+          hiveColumn->name());
+    }
   }
   return std::nullopt;
 }
@@ -87,7 +94,7 @@ std::unique_ptr<DataSource> CudfDeltaConnector::createDataSource(
     ConnectorQueryCtx* connectorQueryCtx) {
   // A scan the cuDF reader cannot produce runs as a CPU TableScan (see
   // CudfTableScanSupport) and needs the CPU data source.
-  if (cudfIsRegistered() &&
+  if (cudfIsRegistered() && isTypeSupportedByCudf(outputType) &&
       !unsupportedGpuScanReason(tableHandle, columnHandles).has_value()) {
     return std::make_unique<CudfDeltaDataSource>(
         outputType,

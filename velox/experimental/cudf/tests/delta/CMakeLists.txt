@@ -17,6 +17,8 @@ velox_add_cudf_test(
   SOURCES ../Main.cpp CudfDeltaReadTest.cpp
   LIBS
     velox_cudf_delta_connector
+    velox_hive_delta_splitreader
+    velox_dwio_parquet_reader
     velox_cudf_exec_test_lib
     velox_exec
     velox_exec_test_lib

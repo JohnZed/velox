@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/delta/CudfDeltaConnector.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
@@ -22,7 +23,9 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/TableHandle.h"
+#include "velox/connectors/hive/delta/DeltaSplitReader.h"
 #include "velox/connectors/hive/delta/HiveDeltaSplit.h"
+#include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/TableScan.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -58,6 +61,9 @@ class CudfDeltaReadTest : public CudfHiveConnectorTestBase {
  protected:
   void SetUp() override {
     CudfHiveConnectorTestBase::SetUp();
+    // Match Prestissimo registration for scans that upstream keeps on CPU.
+    parquet::registerParquetReaderFactory();
+    velox_delta::registerHiveDeltaSplitReader();
 
     cudf_delta::CudfDeltaConnectorFactory factory;
     auto deltaConnector = factory.newConnector(
@@ -72,6 +78,7 @@ class CudfDeltaReadTest : public CudfHiveConnectorTestBase {
   void TearDown() override {
     velox_connector::ConnectorRegistry::global().erase(kCudfDeltaConnectorId);
     CudfHiveConnectorTestBase::TearDown();
+    parquet::unregisterParquetReaderFactory();
   }
 
   std::vector<std::shared_ptr<velox_connector::ConnectorSplit>> makeDeltaSplits(
@@ -432,6 +439,14 @@ TEST_F(CudfDeltaReadTest, gpuScanCapability) {
               testing::HasSubstr("MAP column 'attributes'"));
 
   assignments.clear();
+  assignments["ts"] = makeHandle("ts", TIMESTAMP_WITH_TIME_ZONE());
+  EXPECT_THAT(reason(assignments), testing::HasSubstr("TIMESTAMP WITH TIME ZONE"));
+
+  assignments["ts"] =
+      makeHandle("ts", ARRAY(TIMESTAMP_WITH_TIME_ZONE()));
+  EXPECT_THAT(reason(assignments), testing::HasSubstr("TIMESTAMP WITH TIME ZONE"));
+
+  assignments.clear();
   std::vector<common::Subfield> requiredSubfields;
   requiredSubfields.emplace_back("root.child");
   assignments["nested"] =
@@ -513,8 +528,8 @@ TEST_F(CudfDeltaReadTest, partitionColumnsOutsideDataColumns) {
       .assertResults({expected});
 }
 
-// cuDF has no zoned timestamp type; the reader packs UTC Parquet timestamps
-// into Velox's TIMESTAMP WITH TIME ZONE representation.
+// Upstream excludes custom-comparison types from GPU execution. The Delta
+// connector must return CPU vectors for these scans, including with cuDF enabled.
 TEST_F(CudfDeltaReadTest, timestampWithTimeZoneColumn) {
   const std::vector<int64_t> millis{0, 1'631'081'471'000, -86'400'000};
   auto data = makeRowVector(
@@ -545,6 +560,7 @@ TEST_F(CudfDeltaReadTest, timestampWithTimeZoneColumn) {
                                         pack(millis[2], utc)},
                                        TIMESTAMP_WITH_TIME_ZONE())});
   AssertQueryBuilder(plan)
+      .config(CudfConfig::kCudfAllowCpuFallback, "true")
       .splits(makeDeltaSplits(dataFile->getPath()))
       .assertResults({expected});
 }
@@ -624,13 +640,14 @@ TEST_F(CudfDeltaReadTest, rejectsLocalParquetTimestamp) {
   auto path =
       writeTimestamps({0}, cudf::type_id::TIMESTAMP_MICROSECONDS, false);
   VELOX_ASSERT_THROW(AssertQueryBuilder(timestampScan())
+                         .config(CudfConfig::kCudfAllowCpuFallback, "true")
                          .splits(makeDeltaSplits(path->getPath()))
                          .copyResults(pool_.get()),
                      "not UTC-normalized");
 }
 
-// Zoned timestamps nested in structs and arrays are packed like top-level
-// ones.
+// The same CPU fallback applies recursively to zoned timestamps in structs
+// and arrays; the connector and driver must agree on the vector representation.
 TEST_F(CudfDeltaReadTest, nestedTimestampWithTimeZone) {
   const std::vector<int64_t> millis{0, 1'631'081'471'000, -86'400'000};
   auto timestamps =
@@ -663,6 +680,7 @@ TEST_F(CudfDeltaReadTest, nestedTimestampWithTimeZone) {
       {"s", "a"},
       {makeRowVector({"ts"}, {packed}), makeArrayVector({0, 2, 2}, packed)});
   AssertQueryBuilder(plan)
+      .config(CudfConfig::kCudfAllowCpuFallback, "true")
       .splits(makeDeltaSplits(dataFile->getPath()))
       .assertResults({expected});
 }
