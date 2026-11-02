@@ -42,8 +42,8 @@
 #include "velox/core/QueryCtx.h"
 #include "velox/expression/ExprOptimizer.h"
 #include "velox/functions/lib/string/StringImpl.h"
-#include "velox/type/Filter.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/type/Filter.h"
 
 #include <cudf/column/column_factories.hpp>
 #include <cudf/scalar/scalar.hpp>
@@ -81,9 +81,8 @@ std::optional<cudf::type_id> parquetIntegerType(
       case 64:
         return isSigned ? cudf::type_id::INT64 : cudf::type_id::UINT64;
       default:
-        VELOX_FAIL(
-            "Invalid Parquet integer bit width: {}",
-            schema.logical_type->bit_width());
+        VELOX_FAIL("Invalid Parquet integer bit width: {}",
+                   schema.logical_type->bit_width());
     }
   }
   switch (schema.type) {
@@ -120,10 +119,9 @@ std::optional<SubfieldFilterDecimalType> parquetDecimalType(
       case ParquetType::INT64:
         return cudf::type_id::DECIMAL64;
       case ParquetType::FIXED_LEN_BYTE_ARRAY:
-        VELOX_CHECK_GT(
-            schema.type_length,
-            0,
-            "Invalid fixed-length Parquet decimal width");
+        VELOX_CHECK_GT(schema.type_length,
+                       0,
+                       "Invalid fixed-length Parquet decimal width");
         if (std::cmp_less_equal(schema.type_length, sizeof(int32_t))) {
           return cudf::type_id::DECIMAL32;
         }
@@ -133,9 +131,8 @@ std::optional<SubfieldFilterDecimalType> parquetDecimalType(
         if (std::cmp_less_equal(schema.type_length, sizeof(int128_t))) {
           return cudf::type_id::DECIMAL128;
         }
-        VELOX_FAIL(
-            "Unsupported fixed-length Parquet decimal width: {}",
-            schema.type_length);
+        VELOX_FAIL("Unsupported fixed-length Parquet decimal width: {}",
+                   schema.type_length);
       case ParquetType::BYTE_ARRAY: {
         const auto precision = schema.logical_type->precision();
         VELOX_CHECK_GT(
@@ -153,9 +150,8 @@ std::optional<SubfieldFilterDecimalType> parquetDecimalType(
         return cudf::type_id::DECIMAL128;
       }
       default:
-        VELOX_FAIL(
-            "Unsupported physical Parquet type for decimal column: {}",
-            static_cast<int32_t>(schema.type));
+        VELOX_FAIL("Unsupported physical Parquet type for decimal column: {}",
+                   static_cast<int32_t>(schema.type));
     }
   }();
   return SubfieldFilterDecimalType{decimalType, scale};
@@ -165,15 +161,14 @@ SubfieldFilterDecimalTypes parquetDecimalTypes(
     std::span<const cudf::io::parquet::SchemaElement> metadataSchema,
     const RowTypePtr& readerSchema,
     bool fileColumnNamesReadAsLowerCase) {
-  VELOX_CHECK(
-      !metadataSchema.empty(), "Cannot build a filter from an empty schema");
+  VELOX_CHECK(!metadataSchema.empty(),
+              "Cannot build a filter from an empty schema");
 
   SubfieldFilterDecimalTypes decimalTypes;
   for (const auto childIndex : metadataSchema.front().children_idx) {
-    VELOX_CHECK_LT(
-        childIndex,
-        metadataSchema.size(),
-        "Parquet schema child index out of range");
+    VELOX_CHECK_LT(childIndex,
+                   metadataSchema.size(),
+                   "Parquet schema child index out of range");
     const auto& child = metadataSchema[childIndex];
     const auto name = fileColumnNamesReadAsLowerCase
         ? functions::stringImpl::utf8StrToLowerCopy(child.name)
@@ -201,26 +196,23 @@ SubfieldFilterDecimalTypes parquetDecimalTypes(
 
 // Returns whether a constant-folded filter keeps every row. A null constant
 // keeps none, matching SQL three-valued logic.
-bool isTrueConstant(
-    const core::ConstantTypedExpr& constant,
-    memory::MemoryPool* pool) {
-  VELOX_USER_CHECK_EQ(
-      constant.type()->kind(),
-      TypeKind::BOOLEAN,
-      "Remaining filter must be a boolean expression: {}",
-      constant.toString());
+bool isTrueConstant(const core::ConstantTypedExpr& constant,
+                    memory::MemoryPool* pool) {
+  VELOX_USER_CHECK_EQ(constant.type()->kind(),
+                      TypeKind::BOOLEAN,
+                      "Remaining filter must be a boolean expression: {}",
+                      constant.toString());
   return !constant.isNull() &&
       constant.toConstantVector(pool)->as<ConstantVector<bool>>()->valueAt(0);
 }
 
 // Returns whether a pushed-down filter accepts a partition key value, which
 // is NULL when absent.
-bool testPartitionKeyFilter(
-    const common::Filter& filter,
-    const TypePtr& type,
-    const std::optional<std::string>& value,
-    bool dateValueDaysSinceEpoch,
-    bool timestampValueAsLocalTime) {
+bool testPartitionKeyFilter(const common::Filter& filter,
+                            const TypePtr& type,
+                            const std::optional<std::string>& value,
+                            bool dateValueDaysSinceEpoch,
+                            bool timestampValueAsLocalTime) {
   if (!value.has_value()) {
     return filter.testNull();
   }
@@ -245,15 +237,14 @@ CudfHiveDataSource::CudfHiveDataSource(
     folly::Executor* executor,
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<CudfHiveConfig>& cudfHiveConfig)
-    : CudfHiveDataSource(
-          outputType,
-          tableHandle,
-          columnHandles,
-          fileHandleFactory,
-          executor,
-          connectorQueryCtx,
-          cudfHiveConfig,
-          PartitionKeySource::kDataSource) {}
+    : CudfHiveDataSource(outputType,
+                         tableHandle,
+                         columnHandles,
+                         fileHandleFactory,
+                         executor,
+                         connectorQueryCtx,
+                         cudfHiveConfig,
+                         PartitionKeySource::kDataSource) {}
 
 CudfHiveDataSource::CudfHiveDataSource(
     const RowTypePtr& outputType,
@@ -264,10 +255,9 @@ CudfHiveDataSource::CudfHiveDataSource(
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<CudfHiveConfig>& cudfHiveConfig,
     PartitionKeySource partitionKeySource)
-    : NvtxHelper(
-          nvtx3::rgb{80, 171, 241}, // CudfHive blue,
-          std::nullopt,
-          fmt::format("[{}]", tableHandle->name())),
+    : NvtxHelper(nvtx3::rgb{80, 171, 241}, // CudfHive blue,
+                 std::nullopt,
+                 fmt::format("[{}]", tableHandle->name())),
       cudfHiveConfig_(cudfHiveConfig),
       fileHandleFactory_(fileHandleFactory),
       executor_(executor),
@@ -278,8 +268,8 @@ CudfHiveDataSource::CudfHiveDataSource(
       partitionKeySource_(partitionKeySource) {
   tableHandle_ =
       std::dynamic_pointer_cast<const hive::HiveTableHandle>(tableHandle);
-  VELOX_CHECK_NOT_NULL(
-      tableHandle_, "TableHandle must be an instance of HiveTableHandle");
+  VELOX_CHECK_NOT_NULL(tableHandle_,
+                       "TableHandle must be an instance of HiveTableHandle");
 
   // Column handles by table column name, including those of the columns only
   // the filters read.
@@ -291,6 +281,12 @@ CudfHiveDataSource::CudfHiveDataSource(
   }
   for (const auto& handle : tableHandle_->hiveFilterColumnHandles()) {
     columnHandlesByName.emplace(handle->name(), handle.get());
+  }
+
+  // Delta resolves partition columns in its split reader, including columns
+  // referenced only by a filter. Preserve their types in the shared schema.
+  for (const auto& [name, handle] : columnHandlesByName) {
+    columnTypes_.emplace(name, handle->dataType());
   }
 
   // Returns the handle of a partition key the data source resolves, or null.
@@ -329,10 +325,9 @@ CudfHiveDataSource::CudfHiveDataSource(
   for (uint32_t i = 0; i < outputType_->size(); ++i) {
     const auto& outputName = outputType_->nameOf(i);
     auto it = columnHandles.find(outputName);
-    VELOX_CHECK(
-        it != columnHandles.end(),
-        "ColumnHandle is missing for output column: {}",
-        outputName);
+    VELOX_CHECK(it != columnHandles.end(),
+                "ColumnHandle is missing for output column: {}",
+                outputName);
 
     auto* handle = static_cast<const hive::HiveColumnHandle*>(it->second.get());
     scanColumnNames.emplace_back(handle->name());
@@ -441,9 +436,8 @@ CudfHiveDataSource::CudfHiveDataSource(
        connectorQueryCtx->adjustTimestampToTimezone() ? "true" : "false"}};
   // An empty time zone is not a valid setting; leaving it unset means UTC.
   if (!connectorQueryCtx->sessionTimezone().empty()) {
-    sessionSettings.emplace(
-        core::QueryConfig::kSessionTimezone,
-        connectorQueryCtx->sessionTimezone());
+    sessionSettings.emplace(core::QueryConfig::kSessionTimezone,
+                            connectorQueryCtx->sessionTimezone());
   }
   optimizeQueryCtx_ = core::QueryCtx::create(
       nullptr, core::QueryConfig{std::move(sessionSettings)});
@@ -490,11 +484,11 @@ CudfHiveDataSource::CudfHiveDataSource(
     // The filter is already optimized and constant folded above, so compile it
     // directly.
     auto const remainingFilterType = getTableRowType();
-    cudfRemainingFilterExpression_ = createCudfExpression(
-        optimizedRemainingFilter_,
-        remainingFilterType,
-        pool_,
-        optimizeQueryCtx_->queryConfig());
+    cudfRemainingFilterExpression_ =
+        createCudfExpression(optimizedRemainingFilter_,
+                             remainingFilterType,
+                             pool_,
+                             optimizeQueryCtx_->queryConfig());
   }
 
   // Keep a logical-width AST for filters that must run after the Parquet read.
@@ -528,18 +522,17 @@ CudfHiveDataSource::CudfHiveDataSource(
 }
 
 std::unique_ptr<CudfSplitReader> CudfHiveDataSource::createCudfSplitReader() {
-  return std::make_unique<CudfSplitReader>(
-      split_,
-      tableHandle_,
-      readerOutputType_,
-      readColumnNames_,
-      fileHandleFactory_,
-      executor_,
-      connectorQueryCtx_,
-      cudfHiveConfig_,
-      ioStatistics_,
-      ioStats_,
-      subfieldFilterAst_);
+  return std::make_unique<CudfSplitReader>(split_,
+                                           tableHandle_,
+                                           readerOutputType_,
+                                           readColumnNames_,
+                                           fileHandleFactory_,
+                                           executor_,
+                                           connectorQueryCtx_,
+                                           cudfHiveConfig_,
+                                           ioStatistics_,
+                                           ioStats_,
+                                           subfieldFilterAst_);
 }
 
 void CudfHiveDataSource::convertSplit(std::shared_ptr<ConnectorSplit> split) {
@@ -618,16 +611,15 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
             connectorQueryCtx_->sessionProperties());
     pushdownFilterTree_ = cudf::ast::tree{};
     pushdownFilterScalars_.clear();
-    const auto decimalTypes = parquetDecimalTypes(
-        fileMetadatas.front().schema,
-        readerFilterType,
-        fileColumnNamesReadAsLowerCase);
-    const auto& filter = createAstFromSubfieldFilters(
-        subfieldFilters_,
-        pushdownFilterTree_,
-        pushdownFilterScalars_,
-        readerFilterType,
-        &decimalTypes);
+    const auto decimalTypes =
+        parquetDecimalTypes(fileMetadatas.front().schema,
+                            readerFilterType,
+                            fileColumnNamesReadAsLowerCase);
+    const auto& filter = createAstFromSubfieldFilters(subfieldFilters_,
+                                                      pushdownFilterTree_,
+                                                      pushdownFilterScalars_,
+                                                      readerFilterType,
+                                                      &decimalTypes);
     cudfSplitReader_->setPushdownFilter(&filter);
   }
   cudfSplitReader_->prepareSplit(runtimeStats_);
@@ -653,9 +645,9 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   // TODO: `completedBytes_` should be updated in `next()` as we read more and
   // more table bytes
   try {
-    const auto fileHandleKey = FileHandleKey{
-        .filename = split_->filePath,
-        .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
+    const auto fileHandleKey =
+        FileHandleKey{.filename = split_->filePath,
+                      .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
     auto fileProperties = FileProperties{};
     auto const fileHandleCachePtr = fileHandleFactory_->generate(
         fileHandleKey, &fileProperties, ioStats_ ? ioStats_.get() : nullptr);
@@ -747,18 +739,16 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
     // remaining filter was compiled against. They are temporaries when that
     // filter copies the rows it keeps.
     auto columns = cudfTable->release();
-    VELOX_CHECK_EQ(
-        columns.size(),
-        readColumnNames_.size(),
-        "cuDF table scan read an unexpected number of columns");
+    VELOX_CHECK_EQ(columns.size(),
+                   readColumnNames_.size(),
+                   "cuDF table scan read an unexpected number of columns");
     auto partitionKeyColumns = makePartitionKeyColumns(
         nRows,
         stream,
         optimizedRemainingFilter_ ? get_temp_mr() : get_output_mr());
-    std::move(
-        partitionKeyColumns.begin(),
-        partitionKeyColumns.end(),
-        std::back_inserter(columns));
+    std::move(partitionKeyColumns.begin(),
+              partitionKeyColumns.end(),
+              std::back_inserter(columns));
     cudfTable = std::make_unique<cudf::table>(std::move(columns));
   }
 
@@ -779,8 +769,8 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
         *originalTable, asView(filterResult), stream, get_output_mr());
     nRows = cudfTable->num_rows();
   }
-  totalRemainingFilterTime_.fetch_add(
-      filterTimeUs * 1000, std::memory_order_relaxed);
+  totalRemainingFilterTime_.fetch_add(filterTimeUs * 1000,
+                                      std::memory_order_relaxed);
 
   if (!partitionKeyNames_.empty()) {
     // Project to the output columns by name: the table holds the read columns
@@ -799,10 +789,9 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
     std::vector<size_t> remainingUses(columns.size(), 0);
     for (const auto& name : outputSourceNames_) {
       const auto it = columnIndices.find(name);
-      VELOX_CHECK(
-          it != columnIndices.end(),
-          "Output column {} was neither read nor materialized",
-          name);
+      VELOX_CHECK(it != columnIndices.end(),
+                  "Output column {} was neither read nor materialized",
+                  name);
       outputIndices.push_back(it->second);
       ++remainingUses[it->second];
     }
@@ -810,20 +799,19 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
     outputColumns.reserve(outputIndices.size());
     for (const auto index : outputIndices) {
       auto& column = columns[index];
-      outputColumns.push_back(
-          --remainingUses[index] == 0 ? std::move(column)
-                                      : std::make_unique<cudf::column>(
-                                            *column, stream, get_output_mr()));
+      outputColumns.push_back(--remainingUses[index] == 0
+                                  ? std::move(column)
+                                  : std::make_unique<cudf::column>(
+                                        *column, stream, get_output_mr()));
     }
     cudfTable = std::make_unique<cudf::table>(std::move(outputColumns));
   } else if (outputType_->size() < cudfTable->num_columns()) {
     auto cudfTableColumns = cudfTable->release();
     std::vector<std::unique_ptr<cudf::column>> outputColumns;
     outputColumns.reserve(outputType_->size());
-    std::move(
-        cudfTableColumns.begin(),
-        cudfTableColumns.begin() + outputType_->size(),
-        std::back_inserter(outputColumns));
+    std::move(cudfTableColumns.begin(),
+              cudfTableColumns.begin() + outputType_->size(),
+              std::back_inserter(outputColumns));
     cudfTable = std::make_unique<cudf::table>(std::move(outputColumns));
   }
 
@@ -866,12 +854,11 @@ CudfHiveDataSource::getRuntimeStats() {
   // Preserve a zero-valued totalScanTime before scan timing is recorded.
   result.insert({
       {std::string(io::kTotalScanTime),
-       RuntimeMetric(
-           ioStatistics_->totalScanTimeNs(), RuntimeCounter::Unit::kNanos)},
+       RuntimeMetric(ioStatistics_->totalScanTimeNs(),
+                     RuntimeCounter::Unit::kNanos)},
       {std::string(Connector::kTotalRemainingFilterTime),
-       RuntimeMetric(
-           totalRemainingFilterTime_.load(std::memory_order_relaxed),
-           RuntimeCounter::Unit::kNanos)},
+       RuntimeMetric(totalRemainingFilterTime_.load(std::memory_order_relaxed),
+                     RuntimeCounter::Unit::kNanos)},
   });
   const auto& ioStats = ioStats_->stats();
   for (const auto& [key, value] : ioStats) {
@@ -918,12 +905,11 @@ bool CudfHiveDataSource::partitionKeyFiltersAcceptSplit() const {
   for (const auto& [subfield, filter] : partitionKeyFilters_) {
     const auto& name = subfield.baseName();
     const auto& partitionKey = partitionKeys_.at(name);
-    if (!testPartitionKeyFilter(
-            *filter,
-            partitionKey.type,
-            partitionKeyValue(name),
-            partitionKey.dateValueDaysSinceEpoch,
-            timestampValueAsLocalTime)) {
+    if (!testPartitionKeyFilter(*filter,
+                                partitionKey.type,
+                                partitionKeyValue(name),
+                                partitionKey.dateValueDaysSinceEpoch,
+                                timestampValueAsLocalTime)) {
       VLOG(1) << "Skipping split " << split_->toString()
               << " because the filter on partition key " << name
               << " rejects its value";
@@ -951,12 +937,12 @@ CudfHiveDataSource::makePartitionKeyScalars(cuda::stream_ref stream) const {
   scalars.reserve(partitionKeyNames_.size());
   for (const auto& name : partitionKeyNames_) {
     const auto& partitionKey = partitionKeys_.at(name);
-    const auto constant = newConstantFromString(
-        partitionKey.type,
-        partitionKeyValue(name),
-        pool_,
-        timestampValueAsLocalTime,
-        partitionKey.dateValueDaysSinceEpoch);
+    const auto constant =
+        newConstantFromString(partitionKey.type,
+                              partitionKeyValue(name),
+                              pool_,
+                              timestampValueAsLocalTime,
+                              partitionKey.dateValueDaysSinceEpoch);
     scalars.push_back(makeScalarFromConstantExpr(
         std::make_shared<core::ConstantTypedExpr>(constant),
         pool_,
@@ -971,10 +957,9 @@ CudfHiveDataSource::makePartitionKeyColumns(
     cudf::size_type numRows,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) const {
-  VELOX_CHECK_EQ(
-      partitionKeyScalars_.size(),
-      partitionKeyNames_.size(),
-      "The partition key scalars of the split are missing");
+  VELOX_CHECK_EQ(partitionKeyScalars_.size(),
+                 partitionKeyNames_.size(),
+                 "The partition key scalars of the split are missing");
   std::vector<std::unique_ptr<cudf::column>> columns;
   columns.reserve(partitionKeyScalars_.size());
   for (const auto& scalar : partitionKeyScalars_) {

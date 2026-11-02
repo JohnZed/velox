@@ -29,14 +29,14 @@ CudfDeltaDataSource::CudfDeltaDataSource(
     folly::Executor* executor,
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<CudfHiveConfig>& cudfHiveConfig)
-    : CudfHiveDataSource(
-          outputType,
-          tableHandle,
-          columnHandles,
-          fileHandleFactory,
-          executor,
-          connectorQueryCtx,
-          cudfHiveConfig) {}
+    : CudfHiveDataSource(outputType,
+                         tableHandle,
+                         columnHandles,
+                         fileHandleFactory,
+                         executor,
+                         connectorQueryCtx,
+                         cudfHiveConfig,
+                         PartitionKeySource::kSplitReader) {}
 
 void CudfDeltaDataSource::convertSplit(std::shared_ptr<ConnectorSplit> split) {
   deltaSplit_ = checkedPointerCast<const velox_delta::HiveDeltaSplit>(split);
@@ -44,19 +44,18 @@ void CudfDeltaDataSource::convertSplit(std::shared_ptr<ConnectorSplit> split) {
 }
 
 std::unique_ptr<CudfSplitReader> CudfDeltaDataSource::createCudfSplitReader() {
-  return std::make_unique<CudfDeltaSplitReader>(
-      split_,
-      deltaSplit_,
-      tableHandle_,
-      outputType_,
-      readColumnNames_,
-      fileHandleFactory_,
-      executor_,
-      connectorQueryCtx_,
-      cudfHiveConfig_,
-      ioStatistics_,
-      ioStats_,
-      subfieldFilterAst_);
+  return std::make_unique<CudfDeltaSplitReader>(split_,
+                                                deltaSplit_,
+                                                tableHandle_,
+                                                outputType_,
+                                                readColumnNames_,
+                                                fileHandleFactory_,
+                                                executor_,
+                                                connectorQueryCtx_,
+                                                cudfHiveConfig_,
+                                                ioStatistics_,
+                                                ioStats_,
+                                                subfieldFilterAst_);
 }
 
 } // namespace facebook::velox::cudf_velox::connector::hive::delta

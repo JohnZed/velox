@@ -51,18 +51,17 @@ CudfDeltaSplitReader::CudfDeltaSplitReader(
     const std::shared_ptr<io::IoStatistics>& ioStatistics,
     const std::shared_ptr<IoStats>& ioStats,
     cudf::ast::expression const* subfieldFilterExpr)
-    : CudfSplitReader(
-          std::move(split),
-          std::move(tableHandle),
-          outputType,
-          readColumnNames,
-          fileHandleFactory,
-          executor,
-          connectorQueryCtx,
-          cudfHiveConfig,
-          ioStatistics,
-          ioStats,
-          subfieldFilterExpr),
+    : CudfSplitReader(std::move(split),
+                      std::move(tableHandle),
+                      outputType,
+                      readColumnNames,
+                      fileHandleFactory,
+                      executor,
+                      connectorQueryCtx,
+                      cudfHiveConfig,
+                      ioStatistics,
+                      ioStats,
+                      subfieldFilterExpr),
       deltaSplit_(std::move(deltaSplit)) {
   VELOX_CHECK_NOT_NULL(deltaSplit_);
 }
@@ -119,7 +118,7 @@ void CudfDeltaSplitReader::prepareSubfieldFilter() {
   }
 }
 
-std::optional<std::unique_ptr<cudf::table>>
+std::optional<CudfSplitReader::TableChunk>
 CudfDeltaSplitReader::readNextChunk() {
   std::unique_ptr<cudf::table> table;
   std::optional<cudf::size_type> rowCountOverride;
@@ -144,7 +143,7 @@ CudfDeltaSplitReader::readNextChunk() {
     if (not tableChunk.has_value()) {
       return std::nullopt;
     }
-    table = std::move(tableChunk.value());
+    table = std::move(tableChunk->table);
   }
 
   const auto injectionMemoryResource =
@@ -161,17 +160,18 @@ CudfDeltaSplitReader::readNextChunk() {
         table->view(), filterMask->view(), stream_, get_output_mr());
   }
 
-  return table;
+  const auto numRows = table->num_columns() == 0 ? rowCountOverride.value_or(0)
+                                                 : table->num_rows();
+  return TableChunk{std::move(table), numRows};
 }
 
 void CudfDeltaSplitReader::cacheSchemaFromMetadata() {
   fileMetaDatas();
-  VELOX_CHECK_EQ(
-      fileMetaData_.size(),
-      1,
-      "Expected one Parquet footer for a Delta data file");
+  VELOX_CHECK_EQ(fileMetaDatas_.size(),
+                 1,
+                 "Expected one Parquet footer for a Delta data file");
 
-  const auto& metadata = fileMetaData_.front();
+  const auto& metadata = fileMetaDatas_.front();
   VELOX_CHECK(not metadata.schema.empty(), "Parquet footer schema is empty");
   VELOX_CHECK_GE(
       metadata.num_rows, 0, "Parquet footer reports a negative row count");
@@ -180,10 +180,9 @@ void CudfDeltaSplitReader::cacheSchemaFromMetadata() {
   const auto& root = metadata.schema.front();
   fileColumnNames_.reserve(root.children_idx.size());
   for (const auto childIndex : root.children_idx) {
-    VELOX_CHECK_LT(
-        childIndex,
-        metadata.schema.size(),
-        "Parquet schema child index is out of range");
+    VELOX_CHECK_LT(childIndex,
+                   metadata.schema.size(),
+                   "Parquet schema child index is out of range");
     fileColumnNames_.insert(metadata.schema[childIndex].name);
   }
 }
@@ -205,7 +204,7 @@ std::pair<std::size_t, std::size_t> CudfDeltaSplitReader::computeSplitRowRange()
 
   std::size_t startRow{0};
   std::size_t numRows{0};
-  for (const auto& rowGroup : fileMetaData_.front().row_groups) {
+  for (const auto& rowGroup : fileMetaDatas_.front().row_groups) {
     const auto offset = rowGroupOffset(rowGroup);
     if (offset < split_->start) {
       startRow += rowGroup.num_rows;
@@ -261,11 +260,11 @@ std::unique_ptr<cudf::scalar> CudfDeltaSplitReader::makeInjectedScalar(
     // Match the CPU DeltaSplitReader: when the session adjusts timestamps to
     // its time zone, timestamp partition values are interpreted in that zone.
     const auto& sessionTimezone = connectorQueryCtx_->sessionTimezone();
-    const tz::TimeZone* timezone =
-        connectorQueryCtx_->adjustTimestampToTimezone() &&
-            !sessionTimezone.empty()
-        ? tz::locateZone(sessionTimezone)
-        : nullptr;
+    const tz::TimeZone* timezone = sessionTimezone.empty()
+        ? nullptr
+        : tz::locateZone(connectorQueryCtx_->adjustTimestampToTimezone()
+                             ? sessionTimezone
+                             : "UTC");
     const VectorPtr constant = velox::connector::hive::newConstantFromString(
         column.veloxType,
         column.value,
@@ -304,13 +303,12 @@ std::unique_ptr<cudf::column> CudfDeltaSplitReader::makeAllNullColumn(
       children.push_back(
           makeAllNullColumn(type->childAt(index), numRows, memoryResource));
     }
-    return cudf::make_structs_column(
-        numRows,
-        std::move(children),
-        numRows,
-        nullMask(),
-        stream_,
-        memoryResource);
+    return cudf::make_structs_column(numRows,
+                                     std::move(children),
+                                     numRows,
+                                     nullMask(),
+                                     stream_,
+                                     memoryResource);
   }
 
   if (type->isArray()) {
@@ -352,14 +350,6 @@ std::unique_ptr<cudf::table> CudfDeltaSplitReader::buildOutputTable(
       ? std::vector<std::unique_ptr<cudf::column>>{}
       : table->release();
 
-  if (physicalColumns.empty() and injectedColumns_.empty()) {
-    cudf::numeric_scalar<int8_t> zero{0, true, stream_, memoryResource};
-    std::vector<std::unique_ptr<cudf::column>> dummyColumns;
-    dummyColumns.push_back(
-        cudf::make_column_from_scalar(zero, numRows, stream_, memoryResource));
-    return std::make_unique<cudf::table>(std::move(dummyColumns));
-  }
-
   std::vector<std::unique_ptr<cudf::column>> outputColumns;
   outputColumns.reserve(physicalColumns.size() + injectedColumns_.size());
   auto physical = physicalColumns.begin();
@@ -373,19 +363,16 @@ std::unique_ptr<cudf::table> CudfDeltaSplitReader::buildOutputTable(
       outputColumns.push_back(
           makeInjectedColumn(*injected++, numRows, memoryResource));
     } else {
-      VELOX_CHECK(
-          physical != physicalColumns.end(),
-          "Physical Delta column index is out of range");
+      VELOX_CHECK(physical != physicalColumns.end(),
+                  "Physical Delta column index is out of range");
       outputColumns.push_back(std::move(*physical++));
     }
   }
 
-  VELOX_CHECK(
-      physical == physicalColumns.end(),
-      "Not all physical Delta columns were consumed");
-  VELOX_CHECK(
-      injected == injectedColumns_.end(),
-      "Not all synthesized Delta columns were consumed");
+  VELOX_CHECK(physical == physicalColumns.end(),
+              "Not all physical Delta columns were consumed");
+  VELOX_CHECK(injected == injectedColumns_.end(),
+              "Not all synthesized Delta columns were consumed");
   return std::make_unique<cudf::table>(std::move(outputColumns));
 }
 

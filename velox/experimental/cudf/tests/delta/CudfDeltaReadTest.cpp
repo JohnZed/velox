@@ -152,12 +152,11 @@ class CudfDeltaReadTest : public CudfHiveConnectorTestBase {
 };
 
 TEST_F(CudfDeltaReadTest, partitionInfoAndMissingColumns) {
-  auto data = makeRowVector(
-      {"id", "value"},
-      {
-          makeFlatVector<int64_t>({1, 2, 3}),
-          makeFlatVector<int32_t>({10, 20, 30}),
-      });
+  auto data = makeRowVector({"id", "value"},
+                            {
+                                makeFlatVector<int64_t>({1, 2, 3}),
+                                makeFlatVector<int32_t>({10, 20, 30}),
+                            });
   auto dataFile = TempFilePath::create();
   writeToFile(dataFile->getPath(), data);
 
@@ -183,17 +182,17 @@ TEST_F(CudfDeltaReadTest, partitionInfoAndMissingColumns) {
                   .assignments(assignments)
                   .endTableScan()
                   .planNode();
-  auto expected = makeRowVector(
-      tableType->names(),
-      {
-          data->childAt(0),
-          makeFlatVector<std::string>({"US", "US", "US"}),
-          makeNullConstant(TypeKind::INTEGER, 3),
-          BaseVector::createNullConstant(detailType, 3, pool()),
-          makeFlatVector<std::string>(
-              {"delta-file", "delta-file", "delta-file"}),
-          data->childAt(1),
-      });
+  auto expected =
+      makeRowVector(tableType->names(),
+                    {
+                        data->childAt(0),
+                        makeFlatVector<std::string>({"US", "US", "US"}),
+                        makeNullConstant(TypeKind::INTEGER, 3),
+                        BaseVector::createNullConstant(detailType, 3, pool()),
+                        makeFlatVector<std::string>(
+                            {"delta-file", "delta-file", "delta-file"}),
+                        data->childAt(1),
+                    });
 
   AssertQueryBuilder(plan)
       .splits(makeDeltaSplits(
@@ -202,11 +201,10 @@ TEST_F(CudfDeltaReadTest, partitionInfoAndMissingColumns) {
 }
 
 TEST_F(CudfDeltaReadTest, injectedOnlyProjectionAndFilter) {
-  auto data = makeRowVector(
-      {"id"},
-      {
-          makeFlatVector<int64_t>({1, 2, 3}),
-      });
+  auto data = makeRowVector({"id"},
+                            {
+                                makeFlatVector<int64_t>({1, 2, 3}),
+                            });
   auto dataFile = TempFilePath::create();
   writeToFile(dataFile->getPath(), data);
 
@@ -254,24 +252,21 @@ TEST_F(CudfDeltaReadTest, injectedOnlyProjectionAndFilter) {
 }
 
 TEST_F(CudfDeltaReadTest, deltaPartitionEncoding) {
-  auto data = makeRowVector(
-      {"id"},
-      {
-          makeFlatVector<int64_t>({1, 2}),
-      });
+  auto data = makeRowVector({"id"},
+                            {
+                                makeFlatVector<int64_t>({1, 2}),
+                            });
   auto dataFile = TempFilePath::create();
   writeToFile(dataFile->getPath(), data);
 
-  auto tableType =
-      ROW({"id", "partition_date", "empty", "null_value"},
-          {BIGINT(), DATE(), VARCHAR(), VARCHAR()});
+  auto tableType = ROW({"id", "partition_date", "empty", "null_value"},
+                       {BIGINT(), DATE(), VARCHAR(), VARCHAR()});
   velox_connector::ColumnHandleMap assignments;
   assignments["id"] = makeHandle("id", BIGINT());
   for (const auto& name : {"partition_date", "empty", "null_value"}) {
-    assignments[name] = makeHandle(
-        name,
-        tableType->findChild(name),
-        HiveColumnHandle::ColumnType::kPartitionKey);
+    assignments[name] = makeHandle(name,
+                                   tableType->findChild(name),
+                                   HiveColumnHandle::ColumnType::kPartitionKey);
   }
   auto plan = PlanBuilder()
                   .startTableScan()
@@ -282,21 +277,20 @@ TEST_F(CudfDeltaReadTest, deltaPartitionEncoding) {
                   .endTableScan()
                   .planNode();
   const auto days = DATE()->toDays("2025-06-05");
-  auto expected = makeRowVector(
-      tableType->names(),
-      {
-          data->childAt(0),
-          makeFlatVector<int32_t>({days, days}, DATE()),
-          makeFlatVector<std::string>({"", ""}),
-          makeNullConstant(TypeKind::VARCHAR, 2),
-      });
+  auto expected =
+      makeRowVector(tableType->names(),
+                    {
+                        data->childAt(0),
+                        makeFlatVector<int32_t>({days, days}, DATE()),
+                        makeFlatVector<std::string>({"", ""}),
+                        makeNullConstant(TypeKind::VARCHAR, 2),
+                    });
 
   AssertQueryBuilder(plan)
-      .splits(makeDeltaSplits(
-          dataFile->getPath(),
-          {{"partition_date", "2025-06-05"},
-           {"empty", ""},
-           {"null_value", std::nullopt}}))
+      .splits(makeDeltaSplits(dataFile->getPath(),
+                              {{"partition_date", "2025-06-05"},
+                               {"empty", ""},
+                               {"null_value", std::nullopt}}))
       .assertResults({expected});
 }
 
@@ -334,11 +328,10 @@ TEST_F(CudfDeltaReadTest, rejectsDeletionVectors) {
 
     VELOX_ASSERT_USER_THROW(
         AssertQueryBuilder(plan)
-            .splits(makeDeltaSplits(
-                dataFile->getPath(),
-                {{"region", "US"}},
-                {},
-                /*hasDeletionVector=*/true))
+            .splits(makeDeltaSplits(dataFile->getPath(),
+                                    {{"region", "US"}},
+                                    {},
+                                    /*hasDeletionVector=*/true))
             .copyResults(pool()),
         "Reading Delta files with a deletion vector is not supported.");
   }
@@ -346,15 +339,14 @@ TEST_F(CudfDeltaReadTest, rejectsDeletionVectors) {
 
 TEST_F(CudfDeltaReadTest, decimalProjectionAcrossTwoSplits) {
   const auto decimalType = DECIMAL(10, 2);
-  auto data = makeRowVector(
-      {"id", "amount"},
-      {makeFlatVector<int64_t>({1, 2}),
-       makeFlatVector<int64_t>({12345, -6789}, decimalType)});
+  auto data =
+      makeRowVector({"id", "amount"},
+                    {makeFlatVector<int64_t>({1, 2}),
+                     makeFlatVector<int64_t>({12345, -6789}, decimalType)});
   auto dataFile = TempFilePath::create();
   writeToFile(dataFile->getPath(), data);
-  const auto tableType =
-      ROW({"region", "id", "added", "amount"},
-          {VARCHAR(), BIGINT(), INTEGER(), decimalType});
+  const auto tableType = ROW({"region", "id", "added", "amount"},
+                             {VARCHAR(), BIGINT(), INTEGER(), decimalType});
   velox_connector::ColumnHandleMap assignments;
   for (const auto& name : tableType->names()) {
     assignments[name] = makeHandle(
@@ -374,12 +366,11 @@ TEST_F(CudfDeltaReadTest, decimalProjectionAcrossTwoSplits) {
   auto splits = makeDeltaSplits(dataFile->getPath(), {{"region", "US"}});
   auto second = makeDeltaSplits(dataFile->getPath(), {{"region", "US"}});
   splits.insert(splits.end(), second.begin(), second.end());
-  auto expected = makeRowVector(
-      tableType->names(),
-      {makeFlatVector<std::string>({"US", "US"}),
-       data->childAt(0),
-       makeNullConstant(TypeKind::INTEGER, 2),
-       data->childAt(1)});
+  auto expected = makeRowVector(tableType->names(),
+                                {makeFlatVector<std::string>({"US", "US"}),
+                                 data->childAt(0),
+                                 makeNullConstant(TypeKind::INTEGER, 2),
+                                 data->childAt(1)});
   AssertQueryBuilder(plan).maxDrivers(1).splits(splits).assertResults(
       {expected, expected});
 }
@@ -400,24 +391,22 @@ TEST_F(CudfDeltaReadTest, columnMappingMissingPhysicalColumn) {
                   .assignments(assignments)
                   .endTableScan()
                   .planNode();
-  auto expected = makeRowVector(
-      tableType->names(),
-      {data->childAt(0), makeNullConstant(TypeKind::BIGINT, 2)});
-  for (auto mode :
-       {velox_delta::DeltaColumnMappingMode::kNone,
-        velox_delta::DeltaColumnMappingMode::kName}) {
+  auto expected =
+      makeRowVector(tableType->names(),
+                    {data->childAt(0), makeNullConstant(TypeKind::BIGINT, 2)});
+  for (auto mode : {velox_delta::DeltaColumnMappingMode::kNone,
+                    velox_delta::DeltaColumnMappingMode::kName}) {
     AssertQueryBuilder(plan)
         .splits(makeDeltaSplits(dataFile->getPath(), {}, {}, false, mode))
         .assertResults({expected});
   }
   VELOX_ASSERT_USER_THROW(
       AssertQueryBuilder(plan)
-          .splits(makeDeltaSplits(
-              dataFile->getPath(),
-              {},
-              {},
-              false,
-              velox_delta::DeltaColumnMappingMode::kId))
+          .splits(makeDeltaSplits(dataFile->getPath(),
+                                  {},
+                                  {},
+                                  false,
+                                  velox_delta::DeltaColumnMappingMode::kId))
           .copyResults(pool()),
       "field-id resolution is not supported");
 }
@@ -439,20 +428,20 @@ TEST_F(CudfDeltaReadTest, gpuScanCapability) {
 
   assignments["attributes"] =
       makeHandle("attributes", MAP(VARCHAR(), VARCHAR()));
-  EXPECT_THAT(
-      reason(assignments), testing::HasSubstr("MAP column 'attributes'"));
+  EXPECT_THAT(reason(assignments),
+              testing::HasSubstr("MAP column 'attributes'"));
 
   assignments.clear();
   std::vector<common::Subfield> requiredSubfields;
   requiredSubfields.emplace_back("root.child");
-  assignments["nested"] = std::make_shared<HiveColumnHandle>(
-      "nested",
-      HiveColumnHandle::ColumnType::kRegular,
-      BIGINT(),
-      BIGINT(),
-      std::move(requiredSubfields));
-  EXPECT_THAT(
-      reason(assignments), testing::HasSubstr("subfields of column 'nested'"));
+  assignments["nested"] =
+      std::make_shared<HiveColumnHandle>("nested",
+                                         HiveColumnHandle::ColumnType::kRegular,
+                                         BIGINT(),
+                                         BIGINT(),
+                                         std::move(requiredSubfields));
+  EXPECT_THAT(reason(assignments),
+              testing::HasSubstr("subfields of column 'nested'"));
 }
 
 // Presto's Delta connector leaves partition columns out of dataColumns and
@@ -516,10 +505,9 @@ TEST_F(CudfDeltaReadTest, partitionColumnsOutsideDataColumns) {
           .subfieldFiltersMap(combinedFilters)
           .endTableScan()
           .planNode();
-  auto expected = makeRowVector(
-      {"id", "region"},
-      {makeFlatVector<int64_t>({2, 3}),
-       makeFlatVector<std::string>({"US", "US"})});
+  auto expected = makeRowVector({"id", "region"},
+                                {makeFlatVector<int64_t>({2, 3}),
+                                 makeFlatVector<std::string>({"US", "US"})});
   AssertQueryBuilder(combinedPlan)
       .splits(makeDeltaSplits(dataFile->getPath(), {{"region", "US"}}))
       .assertResults({expected});
@@ -531,11 +519,10 @@ TEST_F(CudfDeltaReadTest, timestampWithTimeZoneColumn) {
   const std::vector<int64_t> millis{0, 1'631'081'471'000, -86'400'000};
   auto data = makeRowVector(
       {"ts"},
-      {makeNullableFlatVector<Timestamp>(
-          {Timestamp::fromMillis(millis[0]),
-           Timestamp::fromMillis(millis[1]),
-           std::nullopt,
-           Timestamp::fromMillis(millis[2])})});
+      {makeNullableFlatVector<Timestamp>({Timestamp::fromMillis(millis[0]),
+                                          Timestamp::fromMillis(millis[1]),
+                                          std::nullopt,
+                                          Timestamp::fromMillis(millis[2])})});
   auto dataFile = TempFilePath::create();
   writeToFile(dataFile->getPath(), data);
 
@@ -552,12 +539,11 @@ TEST_F(CudfDeltaReadTest, timestampWithTimeZoneColumn) {
   const auto utc = tz::getTimeZoneID("UTC");
   auto expected = makeRowVector(
       {"ts"},
-      {makeNullableFlatVector<int64_t>(
-          {pack(millis[0], utc),
-           pack(millis[1], utc),
-           std::nullopt,
-           pack(millis[2], utc)},
-          TIMESTAMP_WITH_TIME_ZONE())});
+      {makeNullableFlatVector<int64_t>({pack(millis[0], utc),
+                                        pack(millis[1], utc),
+                                        std::nullopt,
+                                        pack(millis[2], utc)},
+                                       TIMESTAMP_WITH_TIME_ZONE())});
   AssertQueryBuilder(plan)
       .splits(makeDeltaSplits(dataFile->getPath()))
       .assertResults({expected});
@@ -592,14 +578,14 @@ TEST_F(CudfDeltaReadTest, DISABLED_timestampPrecisionAndNegativeFractions) {
     auto values = result->childAt(0)->as<SimpleVector<int64_t>>();
     ASSERT_EQ(result->size(), 6);
     for (size_t i = 0; i < expected.size(); ++i) {
-      EXPECT_EQ(
-          values->valueAt(i), pack(expected[i], tz::getTimeZoneID("UTC")));
+      EXPECT_EQ(values->valueAt(i),
+                pack(expected[i], tz::getTimeZoneID("UTC")));
     }
     EXPECT_TRUE(values->isNullAt(5));
     // Prove a GPU scan ran; fallback-disabled mode can retain CPU scans.
     auto stats = velox::exec::toPlanStats(task->taskStats());
-    EXPECT_GT(
-        stats.at(plan->id()).operatorStats.at("CudfToVelox")->inputRows, 0);
+    EXPECT_GT(stats.at(plan->id()).operatorStats.at("CudfToVelox")->inputRows,
+              0);
   }
 }
 
@@ -619,59 +605,54 @@ TEST_F(CudfDeltaReadTest, DISABLED_timestampPackingLimits) {
     }
     AssertQueryBuilder(plan)
         .splits(makeDeltaSplits(path->getPath()))
-        .assertResults(makeRowVector(
-            {"ts"},
-            {makeNullableFlatVector<int64_t>(
-                expected, TIMESTAMP_WITH_TIME_ZONE())}));
+        .assertResults(
+            makeRowVector({"ts"},
+                          {makeNullableFlatVector<int64_t>(
+                              expected, TIMESTAMP_WITH_TIME_ZONE())}));
   }
   for (auto invalid : {kMinMillisUtc - 1, kMaxMillisUtc + 1}) {
-    auto path = writeTimestamps(
-        {0, invalid, std::nullopt}, cudf::type_id::TIMESTAMP_MILLISECONDS);
-    VELOX_ASSERT_THROW(
-        AssertQueryBuilder(plan)
-            .splits(makeDeltaSplits(path->getPath()))
-            .copyResults(pool_.get()),
-        "TimestampWithTimeZone overflow");
+    auto path = writeTimestamps({0, invalid, std::nullopt},
+                                cudf::type_id::TIMESTAMP_MILLISECONDS);
+    VELOX_ASSERT_THROW(AssertQueryBuilder(plan)
+                           .splits(makeDeltaSplits(path->getPath()))
+                           .copyResults(pool_.get()),
+                       "TimestampWithTimeZone overflow");
   }
 }
 
 TEST_F(CudfDeltaReadTest, rejectsLocalParquetTimestamp) {
   auto path =
       writeTimestamps({0}, cudf::type_id::TIMESTAMP_MICROSECONDS, false);
-  VELOX_ASSERT_THROW(
-      AssertQueryBuilder(timestampScan())
-          .splits(makeDeltaSplits(path->getPath()))
-          .copyResults(pool_.get()),
-      "not UTC-normalized");
+  VELOX_ASSERT_THROW(AssertQueryBuilder(timestampScan())
+                         .splits(makeDeltaSplits(path->getPath()))
+                         .copyResults(pool_.get()),
+                     "not UTC-normalized");
 }
 
 // Zoned timestamps nested in structs and arrays are packed like top-level
 // ones.
 TEST_F(CudfDeltaReadTest, nestedTimestampWithTimeZone) {
   const std::vector<int64_t> millis{0, 1'631'081'471'000, -86'400'000};
-  auto timestamps = makeFlatVector<Timestamp>(
-      {Timestamp::fromMillis(millis[0]),
-       Timestamp::fromMillis(millis[1]),
-       Timestamp::fromMillis(millis[2])});
-  auto data = makeRowVector(
-      {"s", "a"},
-      {makeRowVector({"ts"}, {timestamps}),
-       makeArrayVector({0, 2, 2}, timestamps)});
+  auto timestamps =
+      makeFlatVector<Timestamp>({Timestamp::fromMillis(millis[0]),
+                                 Timestamp::fromMillis(millis[1]),
+                                 Timestamp::fromMillis(millis[2])});
+  auto data = makeRowVector({"s", "a"},
+                            {makeRowVector({"ts"}, {timestamps}),
+                             makeArrayVector({0, 2, 2}, timestamps)});
   auto dataFile = TempFilePath::create();
   writeToFile(dataFile->getPath(), data);
 
-  auto rowType =
-      ROW({"s", "a"},
-          {ROW({"ts"}, {TIMESTAMP_WITH_TIME_ZONE()}),
-           ARRAY(TIMESTAMP_WITH_TIME_ZONE())});
+  auto rowType = ROW({"s", "a"},
+                     {ROW({"ts"}, {TIMESTAMP_WITH_TIME_ZONE()}),
+                      ARRAY(TIMESTAMP_WITH_TIME_ZONE())});
   auto plan = PlanBuilder()
                   .startTableScan()
                   .connectorId(kCudfDeltaConnectorId)
                   .outputType(rowType)
                   .dataColumns(rowType)
-                  .assignments(
-                      {{"s", makeHandle("s", rowType->childAt(0))},
-                       {"a", makeHandle("a", rowType->childAt(1))}})
+                  .assignments({{"s", makeHandle("s", rowType->childAt(0))},
+                                {"a", makeHandle("a", rowType->childAt(1))}})
                   .endTableScan()
                   .planNode();
   const auto utc = tz::getTimeZoneID("UTC");
@@ -751,10 +732,9 @@ TEST_F(CudfDeltaReadTest, preloadedSplits) {
           .splits(splits)
           .copyResults(pool_.get(), task);
   facebook::velox::exec::test::assertEqualResults(
-      {makeRowVector(
-          {"id", "region"},
-          {makeFlatVector<int64_t>(expectedIds),
-           makeFlatVector<std::string>(expectedRegions)})},
+      {makeRowVector({"id", "region"},
+                     {makeFlatVector<int64_t>(expectedIds),
+                      makeFlatVector<std::string>(expectedRegions)})},
       {result});
 
   // Confirms the splits were prepared by the preloader, not on the driver.
@@ -775,31 +755,43 @@ TEST_F(CudfDeltaReadTest, timestampPartitionValueUsesSessionTimezone) {
   auto dataFile = TempFilePath::create();
   writeToFile(dataFile->getPath(), data);
 
-  auto plan = PlanBuilder()
-                  .startTableScan()
-                  .connectorId(kCudfDeltaConnectorId)
-                  .outputType(ROW({"id", "ts"}, {BIGINT(), TIMESTAMP()}))
-                  .dataColumns(ROW({"id"}, {BIGINT()}))
-                  .assignments(
-                      {{"id", makeHandle("id", BIGINT())},
-                       {"ts",
-                        makeHandle(
-                            "ts",
-                            TIMESTAMP(),
-                            HiveColumnHandle::ColumnType::kPartitionKey)}})
-                  .endTableScan()
-                  .planNode();
+  auto plan =
+      PlanBuilder()
+          .startTableScan()
+          .connectorId(kCudfDeltaConnectorId)
+          .outputType(ROW({"id", "ts"}, {BIGINT(), TIMESTAMP()}))
+          .dataColumns(ROW({"id"}, {BIGINT()}))
+          .assignments(
+              {{"id", makeHandle("id", BIGINT())},
+               {"ts",
+                makeHandle("ts",
+                           TIMESTAMP(),
+                           HiveColumnHandle::ColumnType::kPartitionKey)}})
+          .endTableScan()
+          .planNode();
   // 2021-09-08 11:11:11 in America/Los_Angeles (PDT, UTC-7).
-  auto expected = makeRowVector(
-      {"id", "ts"},
-      {makeFlatVector<int64_t>({1}),
-       makeFlatVector<Timestamp>({Timestamp(1'631'124'671, 0)})});
+  auto expected =
+      makeRowVector({"id", "ts"},
+                    {makeFlatVector<int64_t>({1}),
+                     makeFlatVector<Timestamp>({Timestamp(1'631'124'671, 0)})});
   AssertQueryBuilder(plan)
       .config(core::QueryConfig::kSessionTimezone, "America/Los_Angeles")
       .config(core::QueryConfig::kAdjustTimestampToTimezone, "true")
       .splits(
           makeDeltaSplits(dataFile->getPath(), {{"ts", "2021-09-08 11:11:11"}}))
       .assertResults({expected});
+  // With a named session zone but adjustment disabled, preserve the UTC wall
+  // clock rather than using the process's default timezone.
+  auto unadjusted =
+      makeRowVector({"id", "ts"},
+                    {makeFlatVector<int64_t>({1}),
+                     makeFlatVector<Timestamp>({Timestamp(1'631'099'471, 0)})});
+  AssertQueryBuilder(plan)
+      .config(core::QueryConfig::kSessionTimezone, "America/Los_Angeles")
+      .config(core::QueryConfig::kAdjustTimestampToTimezone, "false")
+      .splits(
+          makeDeltaSplits(dataFile->getPath(), {{"ts", "2021-09-08 11:11:11"}}))
+      .assertResults({unadjusted});
 }
 
 } // namespace

@@ -49,9 +49,7 @@ std::optional<std::string> CudfHiveConnector::unsupportedGpuScanReason(
     return std::nullopt;
   }
   const auto unsupportedColumn = [](const std::string& name) {
-    return fmt::format(
-        "cuDF Hive reader does not support partition or synthesized column '{}'",
-        name);
+    return fmt::format("cuDF Hive reader cannot resolve column '{}'", name);
   };
 
   std::unordered_set<std::string> regularColumns;
@@ -61,10 +59,17 @@ std::optional<std::string> CudfHiveConnector::unsupportedGpuScanReason(
     if (handle == nullptr) {
       continue;
     }
-    if (handle->columnType() != HiveColumnHandle::ColumnType::kRegular) {
+    if (handle->columnType() != HiveColumnHandle::ColumnType::kRegular &&
+        handle->columnType() != HiveColumnHandle::ColumnType::kPartitionKey) {
       return unsupportedColumn(handle->name());
     }
     regularColumns.insert(handle->name());
+  }
+
+  for (const auto& handle : hiveTableHandle->hiveFilterColumnHandles()) {
+    if (handle->columnType() == HiveColumnHandle::ColumnType::kPartitionKey) {
+      regularColumns.insert(handle->name());
+    }
   }
 
   // Without dataColumns a missing filter column cannot be told apart from a
@@ -105,14 +110,13 @@ std::unique_ptr<DataSource> CudfHiveConnector::createDataSource(
   // CudfTableScanSupport) and needs the CPU data source.
   if (cudfIsRegistered() && isTypeSupportedByCudf(outputType) &&
       !unsupportedGpuScanReason(tableHandle, columnHandles).has_value()) {
-    return std::make_unique<CudfHiveDataSource>(
-        outputType,
-        tableHandle,
-        columnHandles,
-        &fileHandleFactory_,
-        ioExecutor_,
-        connectorQueryCtx,
-        cudfHiveConfig_);
+    return std::make_unique<CudfHiveDataSource>(outputType,
+                                                tableHandle,
+                                                columnHandles,
+                                                &fileHandleFactory_,
+                                                ioExecutor_,
+                                                connectorQueryCtx,
+                                                cudfHiveConfig_);
   }
 
   return std::make_unique<::facebook::velox::connector::hive::HiveDataSource>(
