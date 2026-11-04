@@ -524,12 +524,15 @@ std::optional<CudfSplitReader::TableChunk> CudfSplitReader::readNextChunk() {
     }
   }
 
-  return castColumnsToVeloxTypes(
-      std::move(tableWithMetadata.tbl),
-      readColumnTypes_,
-      prependRowIndex_ ? 1 : 0,
-      stream_,
-      outputMr);
+  const auto numRows = tableWithMetadata.tbl->num_rows();
+  return TableChunk{
+      castColumnsToVeloxTypes(
+          std::move(tableWithMetadata.tbl),
+          readColumnTypes_,
+          prependRowIndex_ ? 1 : 0,
+          stream_,
+          outputMr),
+      numRows};
 }
 
 void CudfSplitReader::startColumnChunkFetch() {

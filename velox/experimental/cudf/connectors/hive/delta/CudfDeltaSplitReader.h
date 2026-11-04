@@ -62,7 +62,7 @@ class CudfDeltaSplitReader : public CudfSplitReader {
 
   /// Reads physical data, injects Delta constants, and applies deferred
   /// filters before returning the assembled table.
-  std::optional<std::unique_ptr<cudf::table>> readNextChunk() override;
+  std::optional<TableChunk> readNextChunk() override;
 
  private:
   /// Describes a column synthesized after the Parquet read.

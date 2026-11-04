@@ -119,8 +119,7 @@ void CudfDeltaSplitReader::prepareSubfieldFilter() {
   }
 }
 
-std::optional<std::unique_ptr<cudf::table>>
-CudfDeltaSplitReader::readNextChunk() {
+std::optional<CudfSplitReader::TableChunk> CudfDeltaSplitReader::readNextChunk() {
   std::unique_ptr<cudf::table> table;
   std::optional<cudf::size_type> rowCountOverride;
 
@@ -144,7 +143,8 @@ CudfDeltaSplitReader::readNextChunk() {
     if (not tableChunk.has_value()) {
       return std::nullopt;
     }
-    table = std::move(tableChunk.value());
+    rowCountOverride = tableChunk->numRows;
+    table = std::move(tableChunk->table);
   }
 
   const auto injectionMemoryResource =
@@ -161,17 +161,18 @@ CudfDeltaSplitReader::readNextChunk() {
         table->view(), filterMask->view(), stream_, get_output_mr());
   }
 
-  return table;
+  const auto numRows = table->num_rows();
+  return TableChunk{std::move(table), numRows};
 }
 
 void CudfDeltaSplitReader::cacheSchemaFromMetadata() {
   fileMetaDatas();
   VELOX_CHECK_EQ(
-      fileMetaData_.size(),
+      fileMetaDatas_.size(),
       1,
       "Expected one Parquet footer for a Delta data file");
 
-  const auto& metadata = fileMetaData_.front();
+  const auto& metadata = fileMetaDatas_.front();
   VELOX_CHECK(not metadata.schema.empty(), "Parquet footer schema is empty");
   VELOX_CHECK_GE(
       metadata.num_rows, 0, "Parquet footer reports a negative row count");
@@ -205,7 +206,7 @@ std::pair<std::size_t, std::size_t> CudfDeltaSplitReader::computeSplitRowRange()
 
   std::size_t startRow{0};
   std::size_t numRows{0};
-  for (const auto& rowGroup : fileMetaData_.front().row_groups) {
+  for (const auto& rowGroup : fileMetaDatas_.front().row_groups) {
     const auto offset = rowGroupOffset(rowGroup);
     if (offset < split_->start) {
       startRow += rowGroup.num_rows;
@@ -298,7 +299,10 @@ std::unique_ptr<cudf::column> CudfDeltaSplitReader::makeAllNullColumn(
     rmm::device_async_resource_ref memoryResource) const {
   auto nullMask = [&]() {
     return cudf::create_null_mask(
-        numRows, cudf::mask_state::ALL_NULL, stream_, memoryResource);
+        numRows,
+        cudf::mask_state::ALL_NULL,
+        stream_,
+        cudf::memory_resources{memoryResource, get_temp_mr()});
   };
 
   if (type->isRow()) {

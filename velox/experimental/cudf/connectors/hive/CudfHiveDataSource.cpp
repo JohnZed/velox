@@ -30,6 +30,7 @@
 #include "velox/common/Casts.h"
 #include "velox/common/io/IoStatisticsRuntimeStats.h"
 #include "velox/common/time/Timer.h"
+#include "velox/connectors/hive/ConstantFromString.h"
 #include "velox/connectors/hive/FileColumnHandle.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/FileSplitReader.h"
@@ -338,10 +339,6 @@ CudfHiveDataSource::CudfHiveDataSource(
     const auto& name = handle->name();
     scanColumnNames.push_back(name);
     scanColumnTypes.push_back(handle->dataType());
-    if (handle->columnType() != hive::HiveColumnHandle::ColumnType::kRegular &&
-        !firstNonFileColumn_.has_value()) {
-      firstNonFileColumn_ = name;
-    }
     outputSourceNames_.push_back(name);
     if (const auto* partitionKey = partitionKeyHandle(name)) {
       addPartitionKey(name, outputType_->childAt(i), *partitionKey);
