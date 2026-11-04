@@ -258,14 +258,18 @@ std::unique_ptr<cudf::scalar> CudfDeltaSplitReader::makeInjectedScalar(
     const bool readAsLocalTime =
         hiveConfig().readTimestampPartitionValueAsLocalTime(
             connectorQueryCtx_->sessionProperties());
-    // Match the CPU DeltaSplitReader: when the session adjusts timestamps to
-    // its time zone, timestamp partition values are interpreted in that zone.
+    // Match FileSplitReader's partition timestamp interpretation: use the
+    // session zone when adjusting, and UTC when a named session zone does not
+    // request adjustment.
     const auto& sessionTimezone = connectorQueryCtx_->sessionTimezone();
-    const tz::TimeZone* timezone =
-        connectorQueryCtx_->adjustTimestampToTimezone() &&
-            !sessionTimezone.empty()
-        ? tz::locateZone(sessionTimezone)
-        : nullptr;
+    const tz::TimeZone* timezone = nullptr;
+    if (!sessionTimezone.empty()) {
+      if (connectorQueryCtx_->adjustTimestampToTimezone()) {
+        timezone = tz::locateZone(sessionTimezone);
+      } else if (deltaSplit_->partitionKeys.contains(column.name)) {
+        timezone = tz::locateZone("UTC");
+      }
+    }
     const VectorPtr constant = velox::connector::hive::newConstantFromString(
         column.veloxType,
         column.value,

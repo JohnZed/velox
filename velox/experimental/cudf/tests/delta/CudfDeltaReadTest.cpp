@@ -768,9 +768,9 @@ TEST_F(CudfDeltaReadTest, preloadedSplits) {
       1);
 }
 
-// With adjust_timestamp_to_session_timezone, timestamp partition values are
-// wall clock times in the session zone, as in the CPU Delta reader.
-TEST_F(CudfDeltaReadTest, timestampPartitionValueUsesSessionTimezone) {
+// Partition timestamp values use the session zone when adjustment is enabled
+// and UTC when a session zone is named but adjustment is disabled.
+TEST_F(CudfDeltaReadTest, timestampPartitionValueRespectsTimezoneAdjustment) {
   auto data = makeRowVector({"id"}, {makeFlatVector<int64_t>({1})});
   auto dataFile = TempFilePath::create();
   writeToFile(dataFile->getPath(), data);
@@ -800,6 +800,17 @@ TEST_F(CudfDeltaReadTest, timestampPartitionValueUsesSessionTimezone) {
       .splits(
           makeDeltaSplits(dataFile->getPath(), {{"ts", "2021-09-08 11:11:11"}}))
       .assertResults({expected});
+
+  auto expectedUtc = makeRowVector(
+      {"id", "ts"},
+      {makeFlatVector<int64_t>({1}),
+       makeFlatVector<Timestamp>({Timestamp(1'631'099'471, 0)})});
+  AssertQueryBuilder(plan)
+      .config(core::QueryConfig::kSessionTimezone, "America/Los_Angeles")
+      .config(core::QueryConfig::kAdjustTimestampToTimezone, "false")
+      .splits(
+          makeDeltaSplits(dataFile->getPath(), {{"ts", "2021-09-08 11:11:11"}}))
+      .assertResults({expectedUtc});
 }
 
 } // namespace
