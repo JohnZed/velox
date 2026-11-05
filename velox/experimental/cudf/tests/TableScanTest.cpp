@@ -2438,8 +2438,8 @@ TEST_F(TableScanTest, multiLevelNestedDecimalScan) {
   assertDecimalScanRoundTrip(vector, rowType);
 }
 
-// The plain Hive cuDF reader only reads columns stored in the Parquet file, so
-// scans that need partition or synthesized column values are kept on the CPU.
+// The Hive cuDF reader materializes partition keys but cannot produce every
+// synthesized column or every Velox type.
 TEST_F(TableScanTest, unsupportedHiveScanColumns) {
   using HiveColumnHandle = facebook::velox::connector::hive::HiveColumnHandle;
   const auto connector = std::dynamic_pointer_cast<
@@ -2486,14 +2486,14 @@ TEST_F(TableScanTest, unsupportedHiveScanColumns) {
       {"id", makeHandle("id", BIGINT())}};
   EXPECT_EQ(unsupportedColumn(makeTableHandle({}, nullptr), regular), "");
 
-  // Projected partition key.
+  // Projected partition key is materialized by the cuDF reader.
   facebook::velox::connector::ColumnHandleMap withPartition{
       {"id", makeHandle("id", BIGINT())},
       {"ds",
        makeHandle(
            "ds", VARCHAR(), HiveColumnHandle::ColumnType::kPartitionKey)}};
   EXPECT_EQ(
-      unsupportedColumn(makeTableHandle({}, nullptr), withPartition), "ds");
+      unsupportedColumn(makeTableHandle({}, nullptr), withPartition), "");
 
   // Filter on a data column that is not projected is supported.
   facebook::velox::common::SubfieldFilters dataFilter;
@@ -2522,13 +2522,7 @@ TEST_F(TableScanTest, unsupportedHiveScanColumns) {
       unsupportedColumn(makeTableHandle({}, remainingFilter), regular), "ds");
 }
 
-TEST_F(TableScanTest, hivePartitionKeyScanFallsBackToCpu) {
-  // The scan runs on the CPU Hive data source, which needs the CPU Parquet
-  // reader that this cuDF test binary does not register by default.
-  facebook::velox::parquet::registerParquetReaderFactory();
-  SCOPE_EXIT {
-    facebook::velox::parquet::unregisterParquetReaderFactory();
-  };
+TEST_F(TableScanTest, hivePartitionKeyScan) {
   auto data = makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 2, 3})});
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), data);

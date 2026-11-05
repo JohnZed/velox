@@ -54,17 +54,29 @@ std::optional<std::string> CudfHiveConnector::unsupportedGpuScanReason(
         name);
   };
 
-  std::unordered_set<std::string> regularColumns;
+  std::unordered_set<std::string> knownColumns;
   for (const auto& [_, columnHandle] : assignments) {
     const auto* handle =
         dynamic_cast<const HiveColumnHandle*>(columnHandle.get());
     if (handle == nullptr) {
       continue;
     }
-    if (handle->columnType() != HiveColumnHandle::ColumnType::kRegular) {
+    if (!isTypeSupportedByCudf(handle->dataType())) {
+      return fmt::format(
+          "cuDF Hive reader does not support column '{}' of type {}",
+          handle->name(),
+          handle->dataType()->toString());
+    }
+    if (handle->columnType() != HiveColumnHandle::ColumnType::kRegular &&
+        handle->columnType() != HiveColumnHandle::ColumnType::kPartitionKey) {
       return unsupportedColumn(handle->name());
     }
-    regularColumns.insert(handle->name());
+    knownColumns.insert(handle->name());
+  }
+  for (const auto& handle : hiveTableHandle->hiveFilterColumnHandles()) {
+    if (handle->isPartitionKey()) {
+      knownColumns.insert(handle->name());
+    }
   }
 
   // Without dataColumns a missing filter column cannot be told apart from a
@@ -73,17 +85,17 @@ std::optional<std::string> CudfHiveConnector::unsupportedGpuScanReason(
   if (dataColumns == nullptr) {
     return std::nullopt;
   }
-  const auto isFileColumn = [&](const std::string& name) {
-    return regularColumns.contains(name) || dataColumns->containsChild(name);
+  const auto isAvailableColumn = [&](const std::string& name) {
+    return knownColumns.contains(name) || dataColumns->containsChild(name);
   };
   for (const auto& [subfield, _] : hiveTableHandle->subfieldFilters()) {
-    if (!isFileColumn(subfield.baseName())) {
+    if (!isAvailableColumn(subfield.baseName())) {
       return unsupportedColumn(subfield.baseName());
     }
   }
   if (const auto& remainingFilter = hiveTableHandle->remainingFilter()) {
     for (const auto& name : referencedInputFields(remainingFilter)) {
-      if (!isFileColumn(name)) {
+      if (!isAvailableColumn(name)) {
         return unsupportedColumn(name);
       }
     }

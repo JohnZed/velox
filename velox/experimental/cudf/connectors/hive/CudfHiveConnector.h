@@ -42,17 +42,14 @@ class CudfHiveConnector final
       std::shared_ptr<const ConfigBase> config,
       folly::Executor* executor);
 
-  /// The plain Hive cuDF reader only reads columns stored in the Parquet
-  /// file; unlike the Delta and Iceberg cuDF readers it does not synthesize
-  /// partition or info column values. Unsupported scans have:
-  ///  - An output column whose handle is not a regular (file) column, e.g. a
-  ///    partition key or a synthesized column such as $path.
+  /// The Hive cuDF reader reads file columns and materializes partition keys.
+  /// Unsupported scans have:
+  ///  - An output type cuDF cannot represent, or an unsupported synthesized
+  ///    column such as $path.
   ///  - A subfield or remaining filter on a column that is neither a data
-  ///    column nor a regular output column. Presto's Hive connector sends no
-  ///    handles for filter-only columns, so a filter-only partition column is
-  ///    only recognizable as a name missing from dataColumns. The coordinator
-  ///    usually enforces partition filters by pruning, but e.g.
-  ///    `part = 'a' OR x > 5` reaches the worker.
+  ///    column nor described by an output or filter partition handle. Presto's
+  ///    Hive connector may omit handles for filter-only partition columns;
+  ///    those columns are recognizable only when dataColumns is available.
   std::optional<std::string> unsupportedGpuScanReason(
       const ConnectorTableHandlePtr& tableHandle,
       const ColumnHandleMap& assignments) const override;
