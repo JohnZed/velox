@@ -668,9 +668,48 @@ TEST_F(CudfDeltaReadTest, timestampWithTimeZoneColumn) {
       .assertResults({expected});
 }
 
-// TODO(delta): Keep native Parquet units until packing, then floor negative
-// fractions to milliseconds.
-TEST_F(CudfDeltaReadTest, DISABLED_timestampPrecisionAndNegativeFractions) {
+TEST_F(CudfDeltaReadTest, mixedTimestampColumns) {
+  auto data = makeRowVector(
+      {"zoned", "plain"},
+      {makeFlatVector<Timestamp>(
+           {Timestamp::fromMillis(-1001), Timestamp::fromMillis(1234)}),
+       makeFlatVector<Timestamp>(
+           {Timestamp::fromMillis(-1001), Timestamp::fromMillis(1234)})});
+  auto dataFile = TempFilePath::create();
+  writeToFile(dataFile->getPath(), data);
+
+  auto rowType = ROW(
+      {"zoned", "plain"}, {TIMESTAMP_WITH_TIME_ZONE(), TIMESTAMP()});
+  auto plan =
+      PlanBuilder()
+          .startTableScan()
+          .connectorId(kCudfDeltaConnectorId)
+          .outputType(rowType)
+          .dataColumns(rowType)
+          .assignments(
+              {{"zoned", makeHandle("zoned", TIMESTAMP_WITH_TIME_ZONE())},
+               {"plain", makeHandle("plain", TIMESTAMP())}})
+          .endTableScan()
+          .planNode();
+  std::shared_ptr<velox::exec::Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .splits(makeDeltaSplits(dataFile->getPath()))
+                    .copyResults(pool_.get(), task);
+  auto zoned = result->childAt(0)->as<SimpleVector<int64_t>>();
+  auto plain = result->childAt(1)->as<SimpleVector<Timestamp>>();
+  ASSERT_EQ(result->size(), 2);
+  for (size_t i = 0; i < result->size(); ++i) {
+    const auto millis = i == 0 ? -1001 : 1234;
+    EXPECT_EQ(zoned->valueAt(i), pack(millis, tz::getTimeZoneID("UTC")));
+    EXPECT_EQ(plain->valueAt(i), Timestamp::fromMillis(millis));
+  }
+  auto stats = velox::exec::toPlanStats(task->taskStats());
+  EXPECT_GT(stats.at(plan->id()).operatorStats.at("CudfToVelox")->inputRows, 0);
+}
+
+// Native Parquet units preserve pre-epoch fractions until packing floors them
+// to milliseconds.
+TEST_F(CudfDeltaReadTest, timestampPrecisionAndNegativeFractions) {
   // INT64 millis/micros/nanos and independent INT96 nanoseconds must floor
   // pre-epoch fractions consistently and preserve the packed UTC zone key.
   for (int encoding = 0; encoding < 4; ++encoding) {
@@ -708,9 +747,8 @@ TEST_F(CudfDeltaReadTest, DISABLED_timestampPrecisionAndNegativeFractions) {
   }
 }
 
-// TODO(delta): Reject out-of-range milliseconds before shifting into the packed
-// representation.
-TEST_F(CudfDeltaReadTest, DISABLED_timestampPackingLimits) {
+// Out-of-range milliseconds must be rejected before the packed shift.
+TEST_F(CudfDeltaReadTest, timestampPackingLimits) {
   auto plan = timestampScan();
   for (const auto& values : std::vector<std::vector<std::optional<int64_t>>>{
            {kMinMillisUtc, kMaxMillisUtc, std::nullopt},

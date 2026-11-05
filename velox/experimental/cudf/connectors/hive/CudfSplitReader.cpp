@@ -45,6 +45,7 @@
 #include <cudf/io/text/byte_range_info.hpp>
 #include <cudf/io/types.hpp>
 #include <cudf/lists/lists_column_view.hpp>
+#include <cudf/reduction.hpp>
 #include <cudf/scalar/scalar.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/table/table_view.hpp>
@@ -117,10 +118,25 @@ std::unique_ptr<cudf::column> packAsUtcTimestampWithTimeZone(
     col = cudf::cast(col->view(), millisType, stream, mr);
   }
   const cudf::data_type int64Type{cudf::type_id::INT64};
+  const auto millis = cudf::bit_cast(col->view(), int64Type);
+  auto [minimum, maximum] = cudf::minmax(millis, stream, mr);
+  if (minimum->is_valid(stream)) {
+    const auto minMillis =
+        static_cast<const cudf::numeric_scalar<int64_t>*>(minimum.get())
+            ->value(stream);
+    const auto maxMillis =
+        static_cast<const cudf::numeric_scalar<int64_t>*>(maximum.get())
+            ->value(stream);
+    VELOX_USER_CHECK(
+        minMillis >= kMinMillisUtc and maxMillis <= kMaxMillisUtc,
+        "TimestampWithTimeZone overflow: range [{}, {}] ms",
+        minMillis,
+        maxMillis);
+  }
   const auto shift =
       cudf::numeric_scalar<int32_t>(kMillisShift, true, stream, mr);
   return cudf::binary_operation(
-      cudf::bit_cast(col->view(), int64Type),
+      millis,
       shift,
       cudf::binary_operator::SHIFT_LEFT,
       int64Type,
@@ -136,9 +152,16 @@ std::unique_ptr<cudf::column> castColumnToVeloxType(
     std::unique_ptr<cudf::column> col,
     const TypePtr& veloxType,
     cuda::stream_ref stream,
-    rmm::device_async_resource_ref mr) {
+    rmm::device_async_resource_ref mr,
+    cudf::data_type ordinaryTimestampType) {
   if (isTimestampWithTimeZoneType(veloxType)) {
     return packAsUtcTimestampWithTimeZone(std::move(col), stream, mr);
+  }
+
+  if (veloxType->isTimestamp() and
+      ordinaryTimestampType.id() != cudf::type_id::EMPTY and
+      col->type() != ordinaryTimestampType) {
+    return cudf::cast(col->view(), ordinaryTimestampType, stream, mr);
   }
 
   // Decimal type (base case)
@@ -163,7 +186,11 @@ std::unique_ptr<cudf::column> castColumnToVeloxType(
     return rebuildWithTransformedChildren(std::move(col), [&](auto& children) {
       for (size_t i = 0; i < numChildren; ++i) {
         children[i] = castColumnToVeloxType(
-            std::move(children[i]), rowType.childAt(i), stream, mr);
+            std::move(children[i]),
+            rowType.childAt(i),
+            stream,
+            mr,
+            ordinaryTimestampType);
       }
     });
   }
@@ -178,7 +205,11 @@ std::unique_ptr<cudf::column> castColumnToVeloxType(
     return rebuildWithTransformedChildren(std::move(col), [&](auto& children) {
       auto const childIdx = cudf::lists_column_view::child_column_index;
       children[childIdx] = castColumnToVeloxType(
-          std::move(children[childIdx]), veloxType->childAt(0), stream, mr);
+          std::move(children[childIdx]),
+          veloxType->childAt(0),
+          stream,
+          mr,
+          ordinaryTimestampType);
     });
   }
 
@@ -221,7 +252,8 @@ std::unique_ptr<cudf::table> castColumnsToVeloxTypes(
     std::span<const TypePtr> columnTypes,
     size_t numPrependedColumns,
     cuda::stream_ref stream,
-    rmm::device_async_resource_ref mr) {
+    rmm::device_async_resource_ref mr,
+    cudf::data_type ordinaryTimestampType) {
   VELOX_CHECK_EQ(
       numPrependedColumns + columnTypes.size(),
       table->view().num_columns(),
@@ -230,7 +262,11 @@ std::unique_ptr<cudf::table> castColumnsToVeloxTypes(
   for (size_t i = 0; i < columnTypes.size(); ++i) {
     const auto columnIndex = numPrependedColumns + i;
     columns[columnIndex] = castColumnToVeloxType(
-        std::move(columns[columnIndex]), columnTypes[i], stream, mr);
+        std::move(columns[columnIndex]),
+        columnTypes[i],
+        stream,
+        mr,
+        ordinaryTimestampType);
   }
   return std::make_unique<cudf::table>(std::move(columns));
 }
@@ -533,7 +569,8 @@ std::optional<CudfSplitReader::TableChunk> CudfSplitReader::readNextChunk() {
           readColumnTypes_,
           prependRowIndex_ ? 1 : 0,
           stream_,
-          outputMr),
+          outputMr,
+          cudfHiveConfig_->timestampType()),
       numRows};
 }
 
@@ -767,7 +804,13 @@ void CudfSplitReader::setupReaderOptions() {
           .allow_mismatched_pq_schemas(
               cudfHiveConfig_->isAllowMismatchedCudfHiveSchemasSession(
                   sessionProperties))
-          .timestamp_type(cudfHiveConfig_->timestampType())
+          // Preserve source precision when packing zoned timestamps. INT96
+          // negative fractions lose their floor semantics if cuDF first
+          // coerces them to the configured millisecond reader type.
+          .timestamp_type(std::ranges::any_of(
+                              readColumnTypes_, containsTimestampWithTimeZone)
+                              ? cudf::data_type{cudf::type_id::EMPTY}
+                              : cudfHiveConfig_->timestampType())
           // cuDF currently only folds ASCII letters, unlike the CPU reader's
           // UTF-8 folding, so non-ASCII names (rare case) that differ in case
           // do not match.

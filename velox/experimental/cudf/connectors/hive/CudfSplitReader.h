@@ -57,6 +57,7 @@ using CudfParquetReaderPtr = std::unique_ptr<CudfParquetReader>;
 ///    (UTC millis << 12) | zone key, stamped with the UTC key. cuDF has no
 ///    zoned timestamp type, so the Parquet reader returns them as plain
 ///    timestamps.
+///  - Ordinary timestamps are cast to ordinaryTimestampType when provided.
 /// columnTypes must describe every column after numPrependedColumns, which
 /// are left unchanged. Casts and buffer releases use the supplied stream.
 std::unique_ptr<cudf::table> castColumnsToVeloxTypes(
@@ -64,7 +65,9 @@ std::unique_ptr<cudf::table> castColumnsToVeloxTypes(
     std::span<const TypePtr> columnTypes,
     size_t numPrependedColumns,
     cuda::stream_ref stream,
-    rmm::device_async_resource_ref mr);
+    rmm::device_async_resource_ref mr,
+    cudf::data_type ordinaryTimestampType =
+        cudf::data_type{cudf::type_id::EMPTY});
 
 /// Resolves the type of a column that the scan reads, in order of preference:
 /// the table's data columns, the table handle's filter column handles, then
