@@ -57,7 +57,8 @@ std::unique_ptr<CudfSplitReader> CudfDeltaDataSource::createCudfSplitReader() {
       cudfHiveConfig_,
       ioStatistics_,
       ioStats_,
-      subfieldFilterAst_);
+      subfieldFilterAst_,
+      CudfHiveDataSource::getFilters());
 }
 
 } // namespace facebook::velox::cudf_velox::connector::hive::delta

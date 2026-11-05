@@ -576,6 +576,60 @@ TEST_F(CudfDeltaReadTest, partitionColumnsOutsideDataColumns) {
       .assertResults({expected});
 }
 
+TEST_F(CudfDeltaReadTest, mixedPartitionAndDataFilterPrunesRowGroups) {
+  auto dataFile = TempFilePath::create();
+  writeToFile(
+      dataFile->getPath(),
+      std::vector<RowVectorPtr>{
+          makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 2})}),
+          makeRowVector({"id"}, {makeFlatVector<int64_t>({11, 12})}),
+          makeRowVector({"id"}, {makeFlatVector<int64_t>({21, 22})})});
+
+  auto idHandle = makeHandle("id", BIGINT());
+  auto regionHandle = makeHandle(
+      "region", VARCHAR(), HiveColumnHandle::ColumnType::kPartitionKey);
+  common::SubfieldFilters filters;
+  filters[common::Subfield("region")] = velox::exec::equal("US");
+  filters[common::Subfield("id")] = velox::exec::equal(11);
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(kCudfDeltaConnectorId)
+                  .outputType(ROW({"region", "id"}, {VARCHAR(), BIGINT()}))
+                  .dataColumns(ROW({"id"}, {BIGINT()}))
+                  .assignments({{"region", regionHandle}, {"id", idHandle}})
+                  .filterColumnHandles({regionHandle, idHandle})
+                  .subfieldFiltersMap(filters)
+                  .endTableScan()
+                  .planNode();
+
+  std::shared_ptr<velox::exec::Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .splits(makeDeltaSplits(
+                        dataFile->getPath(), {{"region", "US"}}))
+                    .copyResults(pool_.get(), task);
+  auto expected = makeRowVector(
+      {"region", "id"},
+      {makeFlatVector<std::string>({"US"}), makeFlatVector<int64_t>({11})});
+  facebook::velox::exec::test::assertEqualResults({expected}, {result});
+
+  const auto stats = velox::exec::toPlanStats(task->taskStats());
+  const auto& scan = stats.at(plan->id());
+  ASSERT_EQ(scan.customStats.count("processedStrides"), 1);
+  ASSERT_EQ(scan.customStats.count("skippedStrides"), 1);
+  ASSERT_EQ(scan.operatorStats.count("CudfToVelox"), 1);
+  EXPECT_EQ(scan.customStats.at("processedStrides").sum, 1);
+  EXPECT_EQ(scan.customStats.at("skippedStrides").sum, 2);
+  EXPECT_GT(scan.operatorStats.at("CudfToVelox")->inputRows, 0);
+
+  auto rejectedTask = AssertQueryBuilder(plan)
+                          .splits(makeDeltaSplits(
+                              dataFile->getPath(), {{"region", "CA"}}))
+                          .assertEmptyResults();
+  const auto rejected = velox::exec::toPlanStats(rejectedTask->taskStats());
+  EXPECT_EQ(rejected.at(plan->id()).customStats.at("skippedSplits").sum, 1);
+  EXPECT_EQ(rejected.at(plan->id()).rawInputRows, 0);
+}
+
 // cuDF has no zoned timestamp type; the reader packs UTC Parquet timestamps
 // into Velox's TIMESTAMP WITH TIME ZONE representation.
 TEST_F(CudfDeltaReadTest, timestampWithTimeZoneColumn) {

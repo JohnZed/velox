@@ -307,6 +307,10 @@ class CudfSplitReader : public NvtxHelper {
   const cudf::ast::expression* subfieldFilterAst_;
   cudf::ast::expression const* pushdownFilterExpr_;
   bool hasSplitSpecificPushdownFilter_{false};
+  // Row groups selected or rejected by Parquet statistics within the split's
+  // byte range. Added to the scan's runtime statistics during prepareSplit().
+  int64_t skippedRowGroups_{0};
+  int64_t selectedRowGroups_{0};
   // Set when an ignored missing data file leaves nothing to read.
   bool emptySplit_{false};
 

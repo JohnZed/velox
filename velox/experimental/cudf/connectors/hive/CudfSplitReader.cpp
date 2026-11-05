@@ -433,6 +433,8 @@ void CudfSplitReader::prepareSplit(dwio::common::RuntimeStats& runtimeStats) {
   prepareSplitInternal(runtimeStats);
 
   // Update runtime stats.
+  runtimeStats.skippedStrides += skippedRowGroups_;
+  runtimeStats.processedStrides += selectedRowGroups_;
   if (isSplitSkipped()) {
     runtimeStats.skippedSplits++;
     // An unbounded length means the whole file, whose size the split does not
@@ -605,6 +607,8 @@ void CudfSplitReader::resetSplit() {
   splitRowCount_ = 0;
   readAllFileColumns_ = false;
   noColumnsToRead_ = false;
+  skippedRowGroups_ = 0;
+  selectedRowGroups_ = 0;
 }
 
 cudf::ast::expression const* CudfSplitReader::pushdownFilter() const {
@@ -906,6 +910,15 @@ void CudfSplitReader::setupPageIndexes() {
 
 CudfSplitReader::RowGroupPasses CudfSplitReader::selectRowGroupPasses() {
   auto rowGroupIndices = splitReader_->all_row_groups(readerOptions_);
+  const auto countRowGroups = [](const auto& groups) {
+    return std::accumulate(
+        groups.begin(),
+        groups.end(),
+        std::size_t{0},
+        [](auto sum, const auto& sourceRowGroups) {
+          return sum + sourceRowGroups.size();
+        });
+  };
 
   // Filter row groups using row group byte ranges
   if (readerOptions_.get_skip_bytes() > 0 or
@@ -913,6 +926,7 @@ CudfSplitReader::RowGroupPasses CudfSplitReader::selectRowGroupPasses() {
     rowGroupIndices = splitReader_->filter_row_groups_with_byte_range(
         rowGroupIndices, readerOptions_);
   }
+  const auto candidateRowGroups = countRowGroups(rowGroupIndices);
 
   // Filter row groups using column chunk statistics
   if (readerOptions_.get_filter().has_value()) {
@@ -920,13 +934,10 @@ CudfSplitReader::RowGroupPasses CudfSplitReader::selectRowGroupPasses() {
         rowGroupIndices, readerOptions_, stream_);
   }
 
-  const auto numRowGroups = std::accumulate(
-      rowGroupIndices.begin(),
-      rowGroupIndices.end(),
-      std::size_t{0},
-      [](auto sum, const auto& sourceRowGroups) {
-        return sum + sourceRowGroups.size();
-      });
+  const auto numRowGroups = countRowGroups(rowGroupIndices);
+  selectedRowGroups_ += static_cast<int64_t>(numRowGroups);
+  skippedRowGroups_ +=
+      static_cast<int64_t>(candidateRowGroups - numRowGroups);
 
   // No row groups to read.
   if (numRowGroups == 0) {

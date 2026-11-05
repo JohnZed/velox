@@ -16,12 +16,14 @@
 
 #pragma once
 
+#include "velox/experimental/cudf/connectors/hive/CudfInjectedColumnFilterTransform.h"
 #include "velox/experimental/cudf/connectors/hive/CudfSplitReader.h"
 
 #include "velox/connectors/hive/delta/HiveDeltaSplit.h"
 
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <vector>
 
@@ -47,15 +49,18 @@ class CudfDeltaSplitReader : public CudfSplitReader {
       const std::shared_ptr<CudfHiveConfig>& cudfHiveConfig,
       const std::shared_ptr<io::IoStatistics>& ioStatistics,
       const std::shared_ptr<IoStats>& ioStats,
-      cudf::ast::expression const* subfieldFilterExpr);
+      cudf::ast::expression const* subfieldFilterExpr,
+      const common::SubfieldFilters* subfieldFilters);
 
  protected:
   /// Builds the physical projection and constant-injection plan for one Delta
   /// data file before constructing the cuDF reader.
   void prepareSplitInternal(dwio::common::RuntimeStats& runtimeStats) override;
 
-  /// Defers the logical filter when it must observe synthesized columns.
+  /// Pushes the physical-column part of a filter after folding constants.
   cudf::ast::expression const* pushdownFilter() const override;
+
+  bool isSplitSkipped() const override;
 
   /// Uses temporary GPU memory when a deferred filter still has to run.
   rmm::device_async_resource_ref determineCudfMemoryResource() const override;
@@ -92,8 +97,18 @@ class CudfDeltaSplitReader : public CudfSplitReader {
   // Classifies file-backed and synthesized columns and updates projection.
   void adaptColumns();
 
-  // Decides whether to push the logical filter or apply it after injection.
+  // Folds filters on injected columns and rebases physical column references.
   void prepareSubfieldFilter();
+
+  // Returns the portion of the logical filter not enforced by pushdown.
+  const cudf::ast::expression* deferredFilter() const;
+
+  // A physical decimal predicate needs a split-specific AST before pushdown.
+  bool deferEverything() const;
+
+  const common::Filter* topLevelColumnFilter(std::string_view name) const;
+
+  ConstantFilterFold foldInjectedColumn(const InjectedColumn& column) const;
 
   // Builds a cuDF scalar using Velox's CPU-compatible partition parser.
   std::unique_ptr<cudf::scalar> makeInjectedScalar(
@@ -136,8 +151,12 @@ class CudfDeltaSplitReader : public CudfSplitReader {
   // Prevents emitting an injected-only split more than once.
   bool syntheticTableProduced_{false};
 
-  // Indicates that the logical filter must run after column injection.
-  bool deferSubfieldFilter_{false};
+  // The data source owns these filters through split preparation.
+  const common::SubfieldFilters* subfieldFilters_;
+
+  bool skipSplit_{false};
+  std::optional<TransformedFilter> transformedPushdownFilter_;
+  std::optional<TransformedFilter> transformedLogicalFilter_;
 };
 
 } // namespace facebook::velox::cudf_velox::connector::hive::delta

@@ -675,6 +675,9 @@ void CudfHiveDataSource::setFromDataSource(std::unique_ptr<DataSource> source) {
   runtimeStats_.skippedSplits += preparedSource->runtimeStats_.skippedSplits;
   runtimeStats_.processedSplits +=
       preparedSource->runtimeStats_.processedSplits;
+  runtimeStats_.skippedStrides += preparedSource->runtimeStats_.skippedStrides;
+  runtimeStats_.processedStrides +=
+      preparedSource->runtimeStats_.processedStrides;
   runtimeStats_.skippedSplitBytes +=
       preparedSource->runtimeStats_.skippedSplitBytes;
   completedBytes_ += preparedSource->completedBytes_;

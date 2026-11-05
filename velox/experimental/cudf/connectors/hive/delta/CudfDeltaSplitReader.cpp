@@ -50,7 +50,8 @@ CudfDeltaSplitReader::CudfDeltaSplitReader(
     const std::shared_ptr<CudfHiveConfig>& cudfHiveConfig,
     const std::shared_ptr<io::IoStatistics>& ioStatistics,
     const std::shared_ptr<IoStats>& ioStats,
-    cudf::ast::expression const* subfieldFilterExpr)
+    cudf::ast::expression const* subfieldFilterExpr,
+    const common::SubfieldFilters* subfieldFilters)
     : CudfSplitReader(
           std::move(split),
           std::move(tableHandle),
@@ -63,8 +64,10 @@ CudfDeltaSplitReader::CudfDeltaSplitReader(
           ioStatistics,
           ioStats,
           subfieldFilterExpr),
-      deltaSplit_(std::move(deltaSplit)) {
+      deltaSplit_(std::move(deltaSplit)),
+      subfieldFilters_(subfieldFilters) {
   VELOX_CHECK_NOT_NULL(deltaSplit_);
+  VELOX_CHECK_NOT_NULL(subfieldFilters_);
 }
 
 void CudfDeltaSplitReader::resetDeltaSplit() {
@@ -73,11 +76,41 @@ void CudfDeltaSplitReader::resetDeltaSplit() {
   splitRowCount_ = 0;
   noColumnsToRead_ = false;
   syntheticTableProduced_ = false;
-  deferSubfieldFilter_ = false;
+  skipSplit_ = false;
+  transformedPushdownFilter_.reset();
+  transformedLogicalFilter_.reset();
 }
 
 cudf::ast::expression const* CudfDeltaSplitReader::pushdownFilter() const {
-  return deferSubfieldFilter_ ? nullptr : CudfSplitReader::pushdownFilter();
+  if (skipSplit_ or deferEverything()) {
+    return nullptr;
+  }
+  return transformedPushdownFilter_
+      ? transformedPushdownFilter_->pushedExpr
+      : CudfSplitReader::pushdownFilter();
+}
+
+bool CudfDeltaSplitReader::isSplitSkipped() const {
+  return skipSplit_;
+}
+
+bool CudfDeltaSplitReader::deferEverything() const {
+  return transformedPushdownFilter_.has_value() and
+      transformedPushdownFilter_->requiresSplitSpecificDecimalTypes and
+      not hasSplitSpecificPushdownFilter();
+}
+
+const cudf::ast::expression* CudfDeltaSplitReader::deferredFilter() const {
+  if (skipSplit_) {
+    return nullptr;
+  }
+  if (deferEverything()) {
+    return subfieldFilterAst();
+  }
+  const auto& transformed = transformedLogicalFilter_.has_value()
+      ? transformedLogicalFilter_
+      : transformedPushdownFilter_;
+  return transformed.has_value() ? transformed->deferredExpr : nullptr;
 }
 
 void CudfDeltaSplitReader::prepareSplitInternal(
@@ -94,9 +127,12 @@ void CudfDeltaSplitReader::prepareSplitInternal(
   noColumnsToRead_ = readColumnNames_.empty();
   prepareSubfieldFilter();
 
-  if (deferSubfieldFilter_) {
-    VLOG(1) << "Delta subfield filter is deferred until synthesized columns "
-               "are available";
+  if (skipSplit_) {
+    return;
+  }
+  if (deferredFilter() != nullptr) {
+    VLOG(1) << "Part of the Delta subfield filter is deferred until after "
+               "column injection";
   }
   if (not noColumnsToRead_) {
     createCudfReader();
@@ -105,21 +141,74 @@ void CudfDeltaSplitReader::prepareSplitInternal(
 
 rmm::device_async_resource_ref
 CudfDeltaSplitReader::determineCudfMemoryResource() const {
-  return deferSubfieldFilter_ ? get_temp_mr() : get_output_mr();
+  return deferredFilter() != nullptr ? get_temp_mr() : get_output_mr();
 }
 
 void CudfDeltaSplitReader::prepareSubfieldFilter() {
-  if (CudfSplitReader::pushdownFilter() != nullptr and
-      (noColumnsToRead_ or not injectedColumns_.empty())) {
-    // The filter AST is expressed against the complete table layout. Once
-    // synthesized columns are removed from the Parquet projection, its column
-    // indices no longer match the file table. Apply it after rebuilding that
-    // complete layout instead.
-    deferSubfieldFilter_ = true;
+  auto* originalFilter = CudfSplitReader::pushdownFilter();
+  if (originalFilter == nullptr or injectedColumns_.empty()) {
+    return;
+  }
+
+  std::vector<cudf::size_type> injectedColumnIndices;
+  std::vector<ConstantFilterFold> injectedColumnFolds;
+  injectedColumnIndices.reserve(injectedColumns_.size());
+  injectedColumnFolds.reserve(injectedColumns_.size());
+  for (const auto& column : injectedColumns_) {
+    injectedColumnIndices.push_back(
+        static_cast<cudf::size_type>(column.outputIndex));
+    injectedColumnFolds.push_back(foldInjectedColumn(column));
+  }
+
+  transformedPushdownFilter_ = transformFilterForInjectedColumns(
+      *originalFilter, injectedColumnIndices, injectedColumnFolds);
+  if (transformedPushdownFilter_->skipSplit) {
+    skipSplit_ = true;
+    return;
+  }
+
+  auto* logicalFilter = subfieldFilterAst();
+  if (logicalFilter != originalFilter) {
+    transformedLogicalFilter_ = transformFilterForInjectedColumns(
+        *logicalFilter, injectedColumnIndices, injectedColumnFolds);
+    VELOX_CHECK(
+        not transformedLogicalFilter_->skipSplit,
+        "Transformed logical and pushed Delta filters disagree on rejecting the split");
   }
 }
 
+const common::Filter* CudfDeltaSplitReader::topLevelColumnFilter(
+    std::string_view name) const {
+  for (const auto& [subfield, filter] : *subfieldFilters_) {
+    if (filter and subfield.path().size() == 1 and
+        subfield.baseName() == name) {
+      return filter.get();
+    }
+  }
+  return nullptr;
+}
+
+ConstantFilterFold CudfDeltaSplitReader::foldInjectedColumn(
+    const InjectedColumn& column) const {
+  const auto* filter = topLevelColumnFilter(column.name);
+  if (filter == nullptr or column.veloxType->isTimestamp() or
+      column.veloxType->providesCustomComparison()) {
+    // The shared host fold has no session-zone parameter yet. Keep timestamp
+    // predicates for post-read evaluation so they use the injected value.
+    return ConstantFilterFold::kUnknown;
+  }
+  return foldFilterOnConstant(
+      *filter,
+      column.veloxType,
+      column.value,
+      hiveConfig().readTimestampPartitionValueAsLocalTime(
+          connectorQueryCtx_->sessionProperties()));
+}
+
 std::optional<CudfSplitReader::TableChunk> CudfDeltaSplitReader::readNextChunk() {
+  if (skipSplit_) {
+    return std::nullopt;
+  }
   std::unique_ptr<cudf::table> table;
   std::optional<cudf::size_type> rowCountOverride;
 
@@ -147,13 +236,11 @@ std::optional<CudfSplitReader::TableChunk> CudfDeltaSplitReader::readNextChunk()
   }
 
   const auto injectionMemoryResource =
-      deferSubfieldFilter_ ? get_temp_mr() : get_output_mr();
+      deferredFilter() != nullptr ? get_temp_mr() : get_output_mr();
   table = buildOutputTable(
       std::move(table), injectionMemoryResource, rowCountOverride);
 
-  if (deferSubfieldFilter_) {
-    auto* filter = subfieldFilterAst();
-    VELOX_CHECK_NOT_NULL(filter);
+  if (auto* filter = deferredFilter(); filter != nullptr) {
     auto filterMask =
         cudf::compute_column(table->view(), *filter, stream_, get_temp_mr());
     table = cudf::apply_boolean_mask(
