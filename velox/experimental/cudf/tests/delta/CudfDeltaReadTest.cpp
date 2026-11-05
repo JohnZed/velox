@@ -384,6 +384,57 @@ TEST_F(CudfDeltaReadTest, decimalProjectionAcrossTwoSplits) {
       {expected, expected});
 }
 
+TEST_F(CudfDeltaReadTest, missingColumnBecomesPresentAcrossSplits) {
+  auto firstFile = TempFilePath::create();
+  writeToFile(
+      firstFile->getPath(),
+      makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 2})}));
+  auto secondFile = TempFilePath::create();
+  writeToFile(
+      secondFile->getPath(),
+      makeRowVector(
+          {"id", "added"},
+          {makeFlatVector<int64_t>({3, 4}),
+           makeFlatVector<int32_t>({30, 40})}));
+
+  auto outputType = ROW(
+      {"region", "id", "added"}, {VARCHAR(), BIGINT(), INTEGER()});
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(kCudfDeltaConnectorId)
+                  .outputType(outputType)
+                  .dataColumns(ROW({"id", "added"}, {BIGINT(), INTEGER()}))
+                  .assignments(
+                      {{"region",
+                        makeHandle(
+                            "region",
+                            VARCHAR(),
+                            HiveColumnHandle::ColumnType::kPartitionKey)},
+                       {"id", makeHandle("id", BIGINT())},
+                       {"added", makeHandle("added", INTEGER())}})
+                  .endTableScan()
+                  .planNode();
+  auto splits = makeDeltaSplits(firstFile->getPath(), {{"region", "US"}});
+  auto second = makeDeltaSplits(secondFile->getPath(), {{"region", "CA"}});
+  splits.insert(splits.end(), second.begin(), second.end());
+
+  std::shared_ptr<velox::exec::Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .maxDrivers(1)
+                    .splits(splits)
+                    .copyResults(pool_.get(), task);
+  auto expected = makeRowVector(
+      {"region", "id", "added"},
+      {makeFlatVector<std::string>({"US", "US", "CA", "CA"}),
+       makeFlatVector<int64_t>({1, 2, 3, 4}),
+       makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt, 30, 40})});
+  facebook::velox::exec::test::assertEqualResults({expected}, {result});
+
+  const auto stats = velox::exec::toPlanStats(task->taskStats());
+  EXPECT_GT(
+      stats.at(plan->id()).operatorStats.at("CudfToVelox")->inputRows, 0);
+}
+
 TEST_F(CudfDeltaReadTest, columnMappingMissingPhysicalColumn) {
   auto data = makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 2})});
   auto dataFile = TempFilePath::create();
