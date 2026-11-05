@@ -116,6 +116,10 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   // source.
   virtual std::unique_ptr<CudfSplitReader> createCudfSplitReader();
 
+  const RowTypePtr& readerOutputType() const {
+    return readerOutputType_;
+  }
+
   // Virtual method to convert the input `ConnectorSplit` to appropriate
   // subclass(es).
   virtual void convertSplit(std::shared_ptr<ConnectorSplit> split);
@@ -164,7 +168,7 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
 
   // Returns the type of a column read from the file or materialized by the
   // data source, by table column name.
-  const TypePtr& columnType(const std::string& name) const;
+  TypePtr columnType(const std::string& name) const;
 
   // Returns the current split's value of a partition key. A key the split
   // does not carry reads as NULL.

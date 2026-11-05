@@ -36,7 +36,8 @@ CudfDeltaDataSource::CudfDeltaDataSource(
           fileHandleFactory,
           executor,
           connectorQueryCtx,
-          cudfHiveConfig) {}
+          cudfHiveConfig,
+          PartitionKeySource::kSplitReader) {}
 
 void CudfDeltaDataSource::convertSplit(std::shared_ptr<ConnectorSplit> split) {
   deltaSplit_ = checkedPointerCast<const velox_delta::HiveDeltaSplit>(split);
@@ -48,7 +49,7 @@ std::unique_ptr<CudfSplitReader> CudfDeltaDataSource::createCudfSplitReader() {
       split_,
       deltaSplit_,
       tableHandle_,
-      outputType_,
+      readerOutputType(),
       readColumnNames_,
       fileHandleFactory_,
       executor_,

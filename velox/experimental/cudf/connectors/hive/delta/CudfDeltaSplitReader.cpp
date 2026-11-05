@@ -143,7 +143,6 @@ std::optional<CudfSplitReader::TableChunk> CudfDeltaSplitReader::readNextChunk()
     if (not tableChunk.has_value()) {
       return std::nullopt;
     }
-    rowCountOverride = tableChunk->numRows;
     table = std::move(tableChunk->table);
   }
 

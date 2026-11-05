@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include "velox/common/memory/Memory.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
@@ -41,6 +42,10 @@
 namespace facebook::velox::cudf_velox {
 
 std::optional<cudf::data_type> tryVeloxToCudfDataType(const TypePtr& type) {
+  // The cuDF scan packs this logical type into Velox's int64 representation.
+  if (isTimestampWithTimeZoneType(type)) {
+    return cudf::data_type{cudf::type_id::INT64};
+  }
   if (type->providesCustomComparison()) {
     return std::nullopt;
   }

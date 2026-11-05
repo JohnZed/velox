@@ -882,16 +882,11 @@ CudfHiveDataSource::getRuntimeStats() {
   return result;
 }
 
-const TypePtr& CudfHiveDataSource::columnType(const std::string& name) const {
+TypePtr CudfHiveDataSource::columnType(const std::string& name) const {
   if (const auto it = columnTypes_.find(name); it != columnTypes_.end()) {
     return it->second;
   }
-  const auto& dataColumns = tableHandle_->dataColumns();
-  VELOX_USER_CHECK_NOT_NULL(
-      dataColumns,
-      "Table schema is required to resolve the type of filter-only column {}",
-      name);
-  return dataColumns->findChild(name);
+  return resolveScanColumnType(*tableHandle_, name, scanColumnsType_);
 }
 
 std::optional<std::string> CudfHiveDataSource::partitionKeyValue(
