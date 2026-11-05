@@ -21,6 +21,6 @@ add_library(
 
 target_link_libraries(
   velox_cudf_delta_connector
-  PRIVATE velox_hive_delta_splitreader velox_hive_connector
+  PRIVATE velox_hive_delta_splitreader velox_hive_connector velox_cudf_injected_filter_transform
   PUBLIC cudf::cudf velox_cudf_hive_connector
 )

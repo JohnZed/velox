@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergFilterTransform.h"
+#include "velox/experimental/cudf/connectors/hive/CudfInjectedColumnFilterTransform.h"
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/connectors/hive/PartitionValue.h"
@@ -32,7 +32,7 @@
 #include <utility>
 #include <vector>
 
-namespace facebook::velox::cudf_velox::connector::hive::iceberg {
+namespace facebook::velox::cudf_velox::connector::hive {
 
 namespace {
 
@@ -437,4 +437,4 @@ ConstantFilterFold foldFilterOnConstant(
       : ConstantFilterFold::kAlwaysFalse;
 }
 
-} // namespace facebook::velox::cudf_velox::connector::hive::iceberg
+} // namespace facebook::velox::cudf_velox::connector::hive

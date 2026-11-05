@@ -35,5 +35,14 @@ if(VELOX_ENABLE_ABFS)
   target_link_libraries(velox_cudf_hive_connector PRIVATE velox_abfs)
 endif()
 
+add_library(
+  velox_cudf_injected_filter_transform
+  CudfInjectedColumnFilterTransform.cpp
+)
+target_link_libraries(
+  velox_cudf_injected_filter_transform
+  PUBLIC cudf::cudf velox_hive_connector
+)
+
 add_subdirectory(delta)
 add_subdirectory(iceberg)

@@ -19,12 +19,11 @@ add_library(
   CudfIcebergConnector.cpp
   CudfIcebergDataSource.cpp
   CudfIcebergDeletionHelpers.cu
-  CudfIcebergFilterTransform.cpp
   CudfIcebergSplitReader.cpp
 )
 
 target_link_libraries(
   velox_cudf_iceberg_connector
-  PRIVATE velox_hive_iceberg_splitreader velox_hive_connector velox_functions_iceberg
+  PRIVATE velox_hive_iceberg_splitreader velox_hive_connector velox_functions_iceberg velox_cudf_injected_filter_transform
   PUBLIC cudf::cudf velox_cudf_hive_connector
 )
